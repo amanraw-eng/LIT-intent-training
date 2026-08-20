@@ -1,0 +1,8 @@
+torch
+torchaudio
+fastapi
+uvicorn
+librosa
+asyncio
+httpx
+websockets

@@ -1,0 +1,9 @@
+*.env
+*__pycache__
+*.claude
+*.log
+*.gradio
+feedback
+hf_export
+models
+wandb

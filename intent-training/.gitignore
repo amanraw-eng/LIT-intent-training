@@ -1,0 +1,5 @@
+.env
+__pycache__/
+models/checkpoints/
+eval_results/
+.hf_cache/

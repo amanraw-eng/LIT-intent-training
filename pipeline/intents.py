@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from enum import Enum
 
 from google import genai
@@ -11,43 +10,85 @@ from pydantic import BaseModel
 
 from . import config
 
+# Clean Python-native intent definitions directly matching your custom prompt
+INTENT_ROWS = [
+    {
+        "name": "AFFIRMATIVE_ACKNOWLEDGEMENT",
+        "condition": "Generic positive acknowledgement or agreement. A clearly affirmative 'हम्म' counts. Do NOT infer context.",
+        "examples": "हाँ, जी, जी हाँ, हाँ जी, हाँ हाँ, जी जी, ठीक है, बिल्कुल, हम्म",
+    },
+    {
+        "name": "NEGATIVE_ACKNOWLEDGEMENT",
+        "condition": "Generic negative acknowledgement or denial. Specific meaning overrides this class.",
+        "examples": "नहीं, ना, जी नहीं, नहीं जी, बिल्कुल नहीं",
+    },
+    {
+        "name": "IDENTITY_CONFIRMED",
+        "condition": "Customer explicitly identifies themselves as the requested person.",
+        "examples": "हाँ मैं ही हूँ, जी हाँ मैं ही हूँ, मैं ही बोल रहा हूँ, हाँ यही हूँ, जी मैं ही हूँ, Yes this is me, Yes speaking",
+    },
+    {
+        "name": "THIRD_PARTY_AVAILABLE",
+        "condition": "Customer explicitly indicates that requested person is available, coming to phone, or handed phone.",
+        "examples": "फोन दे रहा हूँ, फोन दे रही हूँ, मैं उनको बुलाता हूँ, एक मिनट उनको बुलाता हूँ, वो आ गए हैं, वो आ गए बात कर लीजिए, वो आ रहे हैं, उनसे बात कर सकते हैं",
+    },
+    {
+        "name": "THIRD_PARTY_UNAVAILABLE",
+        "condition": "Customer explicitly says requested person is unavailable, absent, or cannot currently talk without requesting a explicit callback.",
+        "examples": "वो अभी नहीं हैं, वो बाहर हैं, वो घर पर नहीं हैं, वो available नहीं हैं, वो busy हैं, अभी उनसे बात नहीं हो सकती, वो फोन पर नहीं आ सकते",
+    },
+    {
+        "name": "PAY_NOW_AGREE",
+        "condition": "Explicit commitment to make payment immediately/currently. Must contain payment action + immediate timing.",
+        "examples": "अभी payment कर देता हूँ, अभी कर दूंगा payment, अभी पैसे जमा कर देता हूँ, अभी pay कर देता हूँ, तुरंत payment कर देता हूँ",
+    },
+    {
+        "name": "PAY_LATER_AGREE",
+        "condition": "Explicit commitment to make payment later. Must contain payment action + future timing.",
+        "examples": "बाद में payment कर दूंगा, कल payment कर दूंगा, शाम तक कर दूंगा, थोड़ी देर में कर दूंगा, अगले हफ्ते payment कर दूंगा, सोमवार को कर दूंगा",
+    },
+    {
+        "name": "PAID_ALREADY",
+        "condition": "Explicitly says payment has already been completed.",
+        "examples": "मैंने payment कर दी है, payment हो गई है, मैं pay कर चुका हूँ, पैसे जमा कर दिए हैं, पहले ही payment कर दी, payment successful हो गई, transaction complete हो गया, पैसे भेज दिए हैं",
+    },
+    {
+        "name": "REFUSE_TO_PAY",
+        "condition": "Explicit refusal/unwillingness to pay without presenting specific non-payment reason.",
+        "examples": "नहीं दूंगा, नहीं दूंगा पैसे, मैं payment नहीं करूंगा, मैं पैसे नहीं दूंगा, payment नहीं करूंगा, मैं भुगतान करने से मना कर रहा हूँ",
+    },
+    {
+        "name": "NON_PAYMENT_REASON",
+        "condition": "Reason provided for payment delay/inability or inability to pay currently.",
+        "examples": "पैसे नहीं हैं, salary नहीं आई, अभी payment नहीं कर सकता, funds नहीं हैं to dekhuga",
+    },
+    {
+        "name": "END_CALL",
+        "condition": "Explicitly ending the current call.",
+        "examples": "बाय, ठीक है बाय, ओके बाय, अच्छा बाय, बाय बाय, नमस्ते, अलविदा, चलता हूँ, फिर बात करेंगे, रखो फोन, कॉल काट दो, अब फोन रख दो।",
+    },
+    {
+        "name": "DO_NOT_CALL",
+        "condition": "Explicit request not to call or contact again.",
+        "examples": "अब कॉल मत करना, दोबारा फोन मत करना, आगे से कॉल मत करना, फिर कभी कॉल मत करना, मुझे फिर कॉल मत करना, इस नंबर पर फोन मत करना",
+    },
+    {
+        "name": "CALL_DEFER",
+        "condition": "Explicit request for a later callback or deferred conversation.",
+        "examples": "बाद में कॉल करना, बाद में फोन करना, थोड़ी देर बाद कॉल करना, कल कॉल करना, बाद में बात करना, अभी busy हूँ बाद में कॉल करना, अभी समय नहीं है बाद में कॉल करिए, शाम को कॉल करना",
+    },
+    {
+        "name": "BACKCHANNEL_OR_NOISE",
+        "condition": "Clearly non-semantic background audio, non-linguistic sound, coughing, breathing, noise.",
+        "examples": "[throat-clearing], [cough], [background noise], [breathing], [mic rustle]",
+    },
+    {
+        "name": "UNCLEAR_INPUT",
+        "condition": "Ambiguous, dependent on missing context, incomplete, complex, or doubtful inputs.",
+        "examples": "हाँ बोलिए, जी बताइए, बोलिए, मैं busy हूँ, मेरा loan नहीं है, ये amount गलत है, penalty नहीं दूंगा, मुझे help चाहिए, steps बताइए, गलत नंबर है, मैं वो नहीं हूँ, शायद लिया था, देखता हूँ, कोशिश करूंगा, कैसे करूँ, क्या करूँ",
+    },
+]
 
-def parse_intents(md_path):
-    """Parse the closed-set intent taxonomy table out of intents.md.
-
-    Returns a list of {"name", "condition", "examples"} dicts, in document order.
-    """
-    rows = []
-    with open(md_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line.startswith("|"):
-                continue
-            cells = [c.strip() for c in line.strip("|").split("|")]
-            if len(cells) != 3:
-                continue
-            m = re.match(r"`([A-Z_]+)`", cells[0])
-            if not m:
-                continue
-            rows.append({"name": m.group(1), "condition": cells[1], "examples": cells[2]})
-    if not rows:
-        raise RuntimeError(f"no intents parsed from {md_path}")
-    return rows
-
-
-def _load_intent_rows(md_path, cache_path):
-    """intents.md is only ever parsed once - after that this reads the cached
-    JSON. Delete cache_path to force a re-parse (e.g. after editing intents.md)."""
-    if os.path.exists(cache_path):
-        with open(cache_path, encoding="utf-8") as f:
-            return json.load(f)
-    rows = parse_intents(md_path)
-    with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump(rows, f, ensure_ascii=False, indent=2)
-    return rows
-
-
-INTENT_ROWS = _load_intent_rows(config.INTENTS_MD_PATH, config.INTENTS_JSON_PATH)
 INTENT_NAMES = [r["name"] for r in INTENT_ROWS]
 Intent = Enum("Intent", {name: name for name in INTENT_NAMES})
 
@@ -88,8 +129,8 @@ def build_system_prompt():
         "Classify each transcript into EXACTLY ONE of the following intents. "
         "Judge by customer meaning in this call context, not surface keywords. "
         "The taxonomy is closed: never invent a new intent. If nothing else fits, "
-        "use UNCLEAR_INPUT; if the transcript is empty or pure noise, use "
-        "SILENCE_NOISE.",
+        "use UNCLEAR_INPUT; if the transcript is empty or pure noise, use  very sure noise means needs very high precision for other classes too except UNCLEAR_INPUT if any ambiguity make UNCLEAR_INPUT so give just noise for " 
+        "BACKCHANNEL_OR_NOISE.",
         "",
         "| Intent | Fires when | Example utterances |",
         "|---|---|---|",
@@ -130,7 +171,7 @@ class _BaseClassifier:
     def classify(self, transcript):
         text = (transcript or "").strip()
         if not text:
-            return "SILENCE_NOISE"
+            return "BACKCHANNEL_OR_NOISE"
         parsed = self.generate_structured(self.system_prompt, _single_prompt(text), IntentResult)
         return parsed.intent.value
 
@@ -141,7 +182,7 @@ class _BaseClassifier:
         return _reconcile_batch(parsed, len(transcripts), self.name)
 
 
-class IntentClassifier(_BaseClassifier):
+class GeminiIntentClassifier(_BaseClassifier):
     """Gemini on Vertex AI. Default backend."""
 
     name = "gemini"
@@ -176,6 +217,7 @@ class IntentClassifier(_BaseClassifier):
                     response_mime_type="application/json",
                     response_schema=response_schema,
                     temperature=temperature,
+                    max_output_tokens=8192,
                 ),
             )
         except Exception as e:
@@ -191,8 +233,6 @@ class OpenAIIntentClassifier(_BaseClassifier):
 
     name = "openai"
 
-    # Reasoning-family models only support the default temperature (1) and
-    # reject an explicit value (incl. 0) with a 400 error - omit it for these.
     _NO_CUSTOM_TEMPERATURE_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
     def __init__(self, model=None):
@@ -231,4 +271,4 @@ class OpenAIIntentClassifier(_BaseClassifier):
 
 
 def build_classifier(use_openai=False):
-    return OpenAIIntentClassifier() if use_openai else IntentClassifier()
+    return OpenAIIntentClassifier() if use_openai else GeminiIntentClassifier()

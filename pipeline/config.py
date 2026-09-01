@@ -12,7 +12,7 @@ load_dotenv(os.path.join(BASE_DIR, "pipeline/.env"))
 
 SOURCE_DATASET_DIR = os.environ.get("SOURCE_DATASET_DIR", "")
 
-DATA_DIR = os.path.join(BASE_DIR, "data")
+DATA_DIR = '/home/jovyan/aman_ws/stt/LIT-intent-training/data'
 OUTPUT_DIR = os.path.join(DATA_DIR, "call_trascript_intent_data")
 SAMPLE_OUTPUT_DIR = os.path.join(DATA_DIR, "call_trascript_intent_data_sample")
 # Second generation pass (e.g. with a different transcription backend) - kept
@@ -90,6 +90,29 @@ CLASSIFY_RETRY_DELAY_S = 3.0
 # Hugging Face Hub push settings. Reads from .env - see load_dotenv above.
 HF_TOKEN = os.environ.get("HF_TOKEN")
 HF_REPO_ID = os.environ.get("HF_REPO_ID")
+
+HF_DATASET_REPO = "kapturecx/call-transcript-intent-data"
+
+HF_DATASET_SPLITS = (
+    "train",
+    "validation",
+    "eval",
+)
+
+RELABEL_BATCH_SIZE = 20
+RELABEL_MAX_CONCURRENCY = 10
+RELABEL_MAX_RETRIES = 4
+RELABEL_RETRY_DELAY_S = 2.0
+
+RELABEL_TEST_OUTPUT = "test_relabel.json"
+RELABEL_FULL_OUTPUT = "call-transcript-intent-data-relabeled"
+RELABEL_CHECKPOINT = "relabel_checkpoint.jsonl"
+
+RELABEL_HF_AUDIO_PREFIX = "audio"
+
+RELABEL_PUSH_AUDIO_BATCH_SIZE = 500
+
+RELABEL_HF_PRIVATE = False
 
 # vLLM transcription backend, selected with --use-vllm. Standard OpenAI-compatible
 # /v1/audio/transcriptions endpoint. Two ways to reach it:

@@ -12,7 +12,7 @@ import soundfile as sf
 from scipy.signal import butter, filtfilt, resample_poly
 
 
-def extract_noise_donors(chunk_paths, max_donors=200, min_duration_s=0.3, scan_limit=3000, seed=0):
+def extract_noise_donors(chunk_paths, max_donors=200, min_duration_s=2, scan_limit=3000, seed=0):
     """Scan real call-audio chunks, measure WHOLE-CLIP RMS, and take the
     quietest ones as noise donors.
 

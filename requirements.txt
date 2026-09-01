@@ -6,3 +6,8 @@ librosa
 asyncio
 httpx
 websockets
+datasets
+genai
+openai-whisper
+pytorch_lightning
+mlflow

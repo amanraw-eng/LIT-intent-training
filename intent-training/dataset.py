@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import Dataset
 from whisper.audio import N_SAMPLES, SAMPLE_RATE, log_mel_spectrogram, pad_or_trim
 
-DEFAULT_REPO_ID = "amn-raw/call-transcript-intent-data"
+DEFAULT_REPO_ID = "kapturecx/call-transcript-intent-data-v2"
 
 
 def load_hf_split(repo_id, split, token=None):

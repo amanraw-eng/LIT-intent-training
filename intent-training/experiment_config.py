@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-EXPERIMENT_VERSION_ENV = "INTENT_EXPERIMENT_VERSION"
-DEFAULT_EXPERIMENT_VERSION = "v5"
+EXPERIMENT_VERSION_ENV = "v6-eval2"
+DEFAULT_EXPERIMENT_VERSION = "v6-eval2"
 
 
 @dataclass(frozen=True)

@@ -30,7 +30,7 @@ os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 REPO_ID = DEFAULT_REPO_ID
-CAP_PER_CLASS = 7000
+CAP_PER_CLASS = 30000
 class LightningModel(pl.LightningModule):
     def __init__(self, n_class, class_weights=None):
         super().__init__()
@@ -181,7 +181,7 @@ if __name__ == "__main__":
             dirpath=experiment_paths.checkpoint_dir,
             monitor='val/acc',
             mode='max',
-            save_top_k=3,
+            save_top_k=4,
             verbose=1,
             filename=experiment_paths.checkpoint_prefix + "-epoch{epoch:02d}")
 
@@ -195,7 +195,7 @@ if __name__ == "__main__":
             fast_dev_run=False, # true for dev run
             accelerator="gpu",
             devices=1,
-            max_epochs=20,
+            max_epochs=10,
             enable_checkpointing=True,
             callbacks=[
                 model_checkpoint_callback,

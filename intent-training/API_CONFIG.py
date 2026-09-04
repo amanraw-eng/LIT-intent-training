@@ -6,9 +6,10 @@ predictions for the same file.
 
 import os
 from dotenv import load_dotenv
-load_dotenv('/home/jovyan/aman_ws/stt/LIT-intent-training/intent-training/.env')
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(f'{PARENT_DIR}/.env')
 
 # Copied from UI_CONFIG.py
 MODEL_PATH = os.path.join(
@@ -27,7 +28,7 @@ PORT = 8000
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 DEFAULT_TOP_K = 3
 MAX_TOP_K = 20
-HF_MODEL_REPO = os.environ.get("HF_MODEL_REPO", "")
+HF_MODEL_REPO = os.environ.get("HF_MODEL_REPO", "amn-raw/whisper-small-intent17-classifier")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 print(f"HF_MODEL: {HF_MODEL_REPO}")

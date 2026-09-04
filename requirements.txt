@@ -11,3 +11,5 @@ genai
 openai-whisper
 pytorch_lightning
 mlflow
+python-multipart
+demucs

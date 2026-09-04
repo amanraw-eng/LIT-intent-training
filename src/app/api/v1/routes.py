@@ -13,8 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from ...core.config import settings
-from ...core.logging import logger
+from ...config import MAX_TOP_K, MAX_UPLOAD_BYTES, MODEL_TYPE, logger, settings
 from ...services.intent_service import service
 from .schemas import (
     HealthResponse,
@@ -41,7 +40,7 @@ async def health():
             detail={
                 "status": "not_ready",
                 "device": service.device,
-                "model_type": settings.MODEL_TYPE,
+                "model_type": MODEL_TYPE,
                 "num_classes": service.num_classes,
                 "model_output_classes": service.model_output_classes,
             },
@@ -50,7 +49,7 @@ async def health():
     return HealthResponse(
         status="ok",
         device=service.device,
-        model_type=settings.MODEL_TYPE,
+        model_type=MODEL_TYPE,
         num_classes=service.num_classes,
     )
 
@@ -61,7 +60,7 @@ async def health():
 
 async def _read_upload(file: UploadFile) -> bytes:
     try:
-        payload = await file.read(settings.MAX_UPLOAD_BYTES + 1)
+        payload = await file.read(MAX_UPLOAD_BYTES + 1)
     except Exception as exc:
         logger.exception("Failed to read uploaded file")
         raise HTTPException(status_code=400, detail=f"Failed to read uploaded audio: {exc}") from exc
@@ -74,17 +73,17 @@ async def _read_upload(file: UploadFile) -> bytes:
     if not payload:
         raise HTTPException(status_code=422, detail="Audio upload is empty")
 
-    if len(payload) > settings.MAX_UPLOAD_BYTES:
+    if len(payload) > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"Audio upload exceeds the {settings.MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+            detail=f"Audio upload exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit",
         )
 
     return payload
 
 
 def _resolve_top_k(top_k: int | None) -> int:
-    k_value = top_k if top_k is not None else settings.MAX_TOP_K
+    k_value = top_k if top_k is not None else MAX_TOP_K
 
     try:
         k_value = int(k_value)
@@ -114,7 +113,7 @@ def _build_inference_error_detail(exc: Exception, file: UploadFile, payload: byt
             "error": "Inference failed",
             "exception_type": type(exc).__name__,
             "message": str(exc),
-            "model_type": settings.MODEL_TYPE,
+            "model_type": MODEL_TYPE,
             "num_classes": service.num_classes,
             "model_output_classes": service.model_output_classes,
             "top_k": k_value,
@@ -149,7 +148,7 @@ async def create_transcription(
             detail={
                 "error": "Model is not ready",
                 "num_classes": service.num_classes,
-                "model_type": settings.MODEL_TYPE,
+                "model_type": MODEL_TYPE,
             },
         )
 

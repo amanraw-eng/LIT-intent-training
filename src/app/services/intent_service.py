@@ -16,8 +16,15 @@ import torch
 from huggingface_hub import hf_hub_download
 from whisper.audio import N_SAMPLES, load_audio, log_mel_spectrogram, pad_or_trim
 
-from ..core.config import settings
-from ..core.logging import logger
+from ..config import (
+    DEVICE,
+    MAX_AUDIO_DURATION_SECONDS,
+    MIN_AUDIO_DURATION_SECONDS,
+    MODEL_TYPE,
+    TARGET_SAMPLE_RATE,
+    logger,
+    settings,
+)
 from .whisper_model import WhisperIntentClassification
 
 
@@ -25,7 +32,7 @@ class IntentService:
     """Loads the intent model and runs inference against uploaded audio."""
 
     def __init__(self):
-        self.device = "cuda" if settings.DEVICE == "cuda" and torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if DEVICE == "cuda" and torch.cuda.is_available() else "cpu"
 
         self.model = None
         self.idx_to_intent: dict[int, str] = {}
@@ -49,7 +56,7 @@ class IntentService:
         logger.info("=" * 80)
         logger.info("Starting intent model loading")
         logger.info("Device: %s", self.device)
-        logger.info("MODEL_TYPE: %s", settings.MODEL_TYPE)
+        logger.info("MODEL_TYPE: %s", MODEL_TYPE)
         logger.info("HF_MODEL_REPO: %s", settings.HF_MODEL_REPO)
         logger.info("=" * 80)
 
@@ -58,7 +65,7 @@ class IntentService:
             raise RuntimeError("HF_MODEL_REPO is not configured")
 
         hf_token = settings.HF_TOKEN
-        model_type = settings.MODEL_TYPE
+        model_type = MODEL_TYPE
         if not model_type:
             raise RuntimeError("MODEL_TYPE is not configured")
 
@@ -281,7 +288,7 @@ class IntentService:
                 file_path = handle.name
 
             logger.debug("Temporary audio file created: %s", file_path)
-            return load_audio(file_path, sr=settings.TARGET_SAMPLE_RATE)
+            return load_audio(file_path, sr=TARGET_SAMPLE_RATE)
 
         except Exception as exc:
             logger.exception("Audio decoding failed")
@@ -296,13 +303,13 @@ class IntentService:
 
     @staticmethod
     def _validate_duration(audio: np.ndarray) -> float:
-        duration = len(audio) / settings.TARGET_SAMPLE_RATE
+        duration = len(audio) / TARGET_SAMPLE_RATE
         logger.debug("Audio duration: %.3f seconds", duration)
 
-        if not (settings.MIN_AUDIO_DURATION_SECONDS <= duration <= settings.MAX_AUDIO_DURATION_SECONDS):
+        if not (MIN_AUDIO_DURATION_SECONDS <= duration <= MAX_AUDIO_DURATION_SECONDS):
             raise ValueError(
-                f"Audio duration must be between {settings.MIN_AUDIO_DURATION_SECONDS:g} and "
-                f"{settings.MAX_AUDIO_DURATION_SECONDS:g} seconds (received {duration:.3f} seconds)."
+                f"Audio duration must be between {MIN_AUDIO_DURATION_SECONDS:g} and "
+                f"{MAX_AUDIO_DURATION_SECONDS:g} seconds (received {duration:.3f} seconds)."
             )
         return duration
 

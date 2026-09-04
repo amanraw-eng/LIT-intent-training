@@ -28,8 +28,7 @@ import torch
 from fastapi import FastAPI
 
 from .api.v1.routes import router as v1_router
-from .core.config import settings
-from .core.logging import logger
+from .config import logger, settings
 from .services.intent_service import service
 
 

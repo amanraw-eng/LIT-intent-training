@@ -7,8 +7,8 @@ from IPython.display import Audio, display
 
 # Input configuration
 #takes audio for urls in JSON_FILE extracts user utterances from user channel
-JSON_FILE = "/home/jovyan/aman_ws/stt/LIT-intent-training/data/August_user_data/xPertVoiceAugconversation_history.json"
-OUTPUT_DIR = "/home/jovyan/aman_ws/stt/LIT-intent-training/data/August_user_data/user_utterances"
+JSON_FILE = "/mnt/HDD8TB/aman_ws/stt/LIT-intent-training/data/August_data/xPertVoice3Aug26PQ.conversation_history.json"
+OUTPUT_DIR = "/mnt/HDD8TB/aman_ws/stt/LIT-intent-training/data/August_data/user_utterances"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -38,18 +38,19 @@ for i,item in enumerate(recordings):
             audio=Audio(data=waveform.numpy(), rate=sample_rate)
             with open("output.wav", "wb") as f:
                 f.write(audio.data)
-        else:
-            break
 
+        if i>40000:
+            break 
+        
         if waveform.shape[0] < 2:
             print(f"Warning: {filename} does not have a 2nd channel (channels found: {waveform.shape[0]}). Skipping...")
         else:
             # Channel 0 = Bot, Channel 1 = User
             user_channel = waveform[1:2, :]  # Retain 2D shape [1, samples]
 
-            # output_path = os.path.join(OUTPUT_DIR, filename)
-            # torchaudio.save(output_path, user_channel, sample_rate)
-            # print(f"Saved user audio to: {output_path}")
+            output_path = os.path.join(OUTPUT_DIR, filename)
+            torchaudio.save(output_path, user_channel, sample_rate)
+            print(f"Saved user audio to: {output_path}")
 
     except Exception as e:
         print(f"Error processing {url}: {e}")

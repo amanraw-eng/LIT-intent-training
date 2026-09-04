@@ -1,18 +1,18 @@
 import os
-
-from dotenv import load_dotenv
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+from shared_config import PROJECT_ROOT, load_environment, project_path, section
+
+BASE_DIR = PROJECT_ROOT
+load_environment(legacy_env=Path(__file__).resolve().parent / ".env")
+_project = section("project")
+_settings = section("pipeline")
+_relabel = _settings["relabel"]
 
 
-# Loads OPENAI_API_KEY (and any other overrides) from .env in the project root,
-# if that file exists. Values already set in the environment take precedence.
-load_dotenv(os.path.join(BASE_DIR, "pipeline/.env"))
+SOURCE_DATASET_DIR = os.environ.get("SOURCE_DATASET_DIR", _settings["source_dataset_dir"])
 
-SOURCE_DATASET_DIR = os.environ.get("SOURCE_DATASET_DIR", "")
-
-DATA_DIR = '/home/jovyan/aman_ws/stt/LIT-intent-training/data'
+DATA_DIR = str(BASE_DIR / _project["data_dir"])
 OUTPUT_DIR = os.path.join(DATA_DIR, "call_trascript_intent_data")
 SAMPLE_OUTPUT_DIR = os.path.join(DATA_DIR, "call_trascript_intent_data_sample")
 # Second generation pass (e.g. with a different transcription backend) - kept
@@ -30,7 +30,7 @@ INTENTS_MD_PATH = os.path.join(BASE_DIR, "intents.md")
 # the first time this doesn't exist. Delete this file to force a re-parse
 # (e.g. after editing intents.md).
 INTENTS_JSON_PATH = os.path.join(BASE_DIR, "intents.json")
-GEMINI_KEY_PATH = os.path.join(BASE_DIR, "kapture-gemini-9d92c74fb501.json")
+GEMINI_KEY_PATH = project_path(os.getenv("GEMINI_KEY_PATH", ".secrets/kapture-gemini-9d92c74fb501.json"))
 # Kept in sync with intents/data by relabel_unclear.py --apply (also
 # refreshable any time by re-running pipeline.intent_analytics by hand).
 INTENT_ANALYTICS_PATH = os.path.join(BASE_DIR, "intent_analytics.json")
@@ -48,8 +48,8 @@ PENDING_INTENT_FILENAME = "pending_intent.jsonl"
 SOURCE_SAMPLE_RATE = 8000
 
 # Transcription (LIT websocket) settings.
-LIT_WS_BASE = os.environ.get("LIT_WS_BASE", "ws://localhost:4000/lit/ws")
-LANGUAGE = "hi"
+LIT_WS_BASE = os.environ.get("LIT_WS_BASE", _settings["lit_ws_base"])
+LANGUAGE = _settings["language"]
 TARGET_SAMPLE_RATE = 16000
 CONNECT_TIMEOUT_S = 5.0
 RECV_TIMEOUT_S = 5.0
@@ -69,13 +69,13 @@ INTER_CHUNK_SLEEP_S = 0.1
 MAX_CONSECUTIVE_TRANSCRIPTION_FAILURES = 25
 
 # Gemini (Vertex AI) settings. Default intent-classification backend.
-GEMINI_PROJECT = "kapture-gemini"
-GEMINI_LOCATION = "us-central1"
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_PROJECT = _settings["gemini_project"]
+GEMINI_LOCATION = _settings["gemini_location"]
+GEMINI_MODEL = _settings["gemini_model"]
 
 # OpenAI settings. Alternative backend, selected with --use-openai. Reads
 # OPENAI_API_KEY from the environment / .env (see load_dotenv above).
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", _settings["openai_model"])
 
 # Intent classification is done in batches (one LLM call classifies many
 # transcripts at once) instead of one call per chunk, to cut down request count.
@@ -91,7 +91,7 @@ CLASSIFY_RETRY_DELAY_S = 3.0
 HF_TOKEN = os.environ.get("HF_TOKEN")
 HF_REPO_ID = os.environ.get("HF_REPO_ID")
 
-HF_DATASET_REPO = "kapturecx/call-transcript-intent-data"
+HF_DATASET_REPO = _settings["hf_dataset_repo"]
 
 HF_DATASET_SPLITS = (
     "train",
@@ -99,10 +99,10 @@ HF_DATASET_SPLITS = (
     "eval",
 )
 
-RELABEL_BATCH_SIZE = 20
-RELABEL_MAX_CONCURRENCY = 10
-RELABEL_MAX_RETRIES = 4
-RELABEL_RETRY_DELAY_S = 2.0
+RELABEL_BATCH_SIZE = _relabel["batch_size"]
+RELABEL_MAX_CONCURRENCY = _relabel["max_concurrency"]
+RELABEL_MAX_RETRIES = _relabel["max_retries"]
+RELABEL_RETRY_DELAY_S = _relabel["retry_delay_s"]
 
 RELABEL_TEST_OUTPUT = "test_relabel.json"
 RELABEL_FULL_OUTPUT = "call-transcript-intent-data-relabeled"
@@ -122,13 +122,13 @@ RELABEL_HF_PRIVATE = False
 # If NGROK_ENDPOINT is set in .env, VLLMTranscriber uses that automatically;
 # otherwise it falls back to the local VLLM_BASE_URL - existing local-only setups
 # keep working unchanged either way.
-VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:5500")
+VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", _settings["vllm_base_url"])
 VLLM_LOCAL_PATH = "/v1/audio/transcriptions"
 NGROK_ENDPOINT = os.environ.get("NGROK_ENDPOINT")
 if NGROK_ENDPOINT and not NGROK_ENDPOINT.startswith(("http://", "https://")):
     NGROK_ENDPOINT = "https://" + NGROK_ENDPOINT  # .env commonly has just the hostname
 QWEN_ASR_PATH = "/qwen-asr/v1/audio/transcriptions"
-VLLM_MODEL = os.environ.get("VLLM_MODEL", "kapturecx/qwen-asr-hindi-3006-ft")
+VLLM_MODEL = os.environ.get("VLLM_MODEL", _settings["vllm_model"])
 VLLM_TIMEOUT_S = 30.0
 # ngrok's free plan documents two SEPARATE rate limits: 100 new TCP
 # connections/min, and 4000 HTTP requests/min (https://ngrok.com/docs/pricing-limits/free-plan-limits).

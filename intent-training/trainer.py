@@ -13,29 +13,36 @@ from pytorch_lightning.loggers import WandbLogger
 import os
 import json
 from collections import Counter
-from dotenv import load_dotenv
 
-# load WANDB_API_KEY / HF_TOKEN (and any other secrets) from .env in this directory
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+from experiment_config import section
 
-# SEED
-SEED = 100
+# RUN SETTINGS (edit shared_settings.py [training])
+_TRAINING = section("training")
+SEED = _TRAINING["seed"]
 pl.seed_everything(SEED)
 torch.manual_seed(SEED)
 
 # update the wandb online/offline model and CUDA device
 os.environ['WANDB_MODE'] = 'online'
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = _TRAINING["gpu_device"]
 
-REPO_ID = DEFAULT_REPO_ID
+REPO_ID = _TRAINING["dataset_repo"]
+
+# ============================================================
+# SCRIPT-SPECIFIC RUN OVERRIDES (edit here for this training run)
+# ============================================================
+BATCH_SIZE = 8
+NUM_WORKERS = 4
+MAX_EPOCHS = 3
+PATIENCE = 5
 
 
 class LightningModel(pl.LightningModule):
     def __init__(self, n_class, class_weights=None):
         super().__init__()
         # tiny/small model
-        self.model = WhisperIntentClassification("small", n_class=n_class)
+        self.model = WhisperIntentClassification(_TRAINING["whisper_size"], n_class=n_class)
         self.register_buffer(
             "class_weights",
             class_weights if class_weights is not None else torch.ones(n_class),
@@ -45,7 +52,7 @@ class LightningModel(pl.LightningModule):
         return self.model(x)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=1e-5, weight_decay=1e-2)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=_TRAINING["learning_rate"], weight_decay=_TRAINING["weight_decay"])
         return [optimizer]
 
     def loss_fn(self, prediction, targets):
@@ -128,16 +135,16 @@ if __name__ == "__main__":
     # dataloaders
     trainloader = torch.utils.data.DataLoader(
             train_dataset,
-            batch_size=8,
+            batch_size=BATCH_SIZE,
             shuffle=True,
-            num_workers=4,
+            num_workers=NUM_WORKERS,
             collate_fn = collate_mel_fn,
         )
 
     valloader = torch.utils.data.DataLoader(
             val_dataset,
-            batch_size=8,
-            num_workers=4,
+            batch_size=BATCH_SIZE,
+            num_workers=NUM_WORKERS,
             collate_fn = collate_mel_fn,
         )
 
@@ -163,14 +170,14 @@ if __name__ == "__main__":
     early_stopping_callback = EarlyStopping(
             monitor='val/acc',
             mode='max',
-            patience=5,
+            patience=PATIENCE,
             verbose=True)
 
     trainer = Trainer(
             fast_dev_run=False, # true for dev run
             accelerator="gpu",
             devices=1,
-            max_epochs=3,
+            max_epochs=MAX_EPOCHS,
             enable_checkpointing=True,
             callbacks=[
                 model_checkpoint_callback,

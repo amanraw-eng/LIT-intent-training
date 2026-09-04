@@ -7,7 +7,6 @@ import os
 import random
 import time
 from pathlib import Path
-from typing import Literal
 
 from datasets import Audio, DatasetDict, load_dataset
 from google import genai
@@ -16,6 +15,7 @@ from google.oauth2 import service_account
 from pydantic import BaseModel, Field
 
 from . import config
+from intent_taxonomy import INTENT_NAMES, INTENT_SET, prompt_taxonomy
 from .relabel_prompt import SYSTEM_PROMPT
 
 
@@ -167,24 +167,6 @@ FULL_OUTPUT = getattr(
 # CLOSED TAXONOMY
 # ============================================================
 
-IntentName = Literal[
-    "AFFIRMATIVE_ACKNOWLEDGEMENT",
-    "NEGATIVE_ACKNOWLEDGEMENT",
-    "IDENTITY_CONFIRMED",
-    "THIRD_PARTY_AVAILABLE",
-    "THIRD_PARTY_UNAVAILABLE",
-    "PAY_NOW_AGREE",
-    "PAY_LATER_AGREE",
-    "PAID_ALREADY",
-    "REFUSE_TO_PAY",
-    "NO_PAYMENT_REASON",
-    "END_CALL",
-    "DO_NOT_CALL",
-    "CALL_DEFER",
-    "BACKCHANNEL_OR_NOISE",
-    "UNCLEAR_INPUT",
-]
-
 
 class RelabelItem(BaseModel):
     """
@@ -196,7 +178,7 @@ class RelabelItem(BaseModel):
 
     index: int
     transcript_reviewed: str
-    intent: IntentName
+    intent: str
     confidence: float = Field(
         ge=0.0,
         le=1.0,
@@ -209,7 +191,7 @@ class RelabelBatchResult(BaseModel):
 
 class IntentOnlyItem(BaseModel):
     index: int
-    intent: IntentName
+    intent: str
     confidence: float = Field(
         ge=0.0,
         le=1.0,
@@ -991,21 +973,7 @@ False positives are worse than UNCLEAR_INPUT.
 
 Allowed intents:
 
-AFFIRMATIVE_ACKNOWLEDGEMENT
-NEGATIVE_ACKNOWLEDGEMENT
-IDENTITY_CONFIRMED
-THIRD_PARTY_AVAILABLE
-THIRD_PARTY_UNAVAILABLE
-PAY_NOW_AGREE
-PAY_LATER_AGREE
-PAID_ALREADY
-REFUSE_TO_PAY
-NO_PAYMENT_REASON
-END_CALL
-DO_NOT_CALL
-CALL_DEFER
-BACKCHANNEL_OR_NOISE
-UNCLEAR_INPUT
+{", ".join(INTENT_NAMES)}
 
 Never invent an intent.
 

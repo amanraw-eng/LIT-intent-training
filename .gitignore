@@ -8,3 +8,4 @@ hf_export
 models
 wandb
 data/
+.secrets/

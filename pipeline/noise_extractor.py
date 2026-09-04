@@ -2,10 +2,14 @@ import os
 import torch
 import torchaudio
 import soundfile as sf
+from tqdm import tqdm
 from demucs.pretrained import get_model
 from demucs.apply import apply_model
 
-def extract_single_file(audio_path, output_dir="/home/jovyan/aman_ws/stt/LIT-intent-training/data/extracted_noise", model=None):
+OUTPUT_NOISE_DIR = '/mnt/HDD8TB/aman_ws/stt/LIT-intent-training/data/production_noise'
+VALID_AUDIO_EXTENSIONS = ('.wav')
+
+def extract_single_file(audio_path, output_dir=OUTPUT_NOISE_DIR, model=None):
     os.makedirs(output_dir, exist_ok=True)
 
     # 1. Load Pretrained Demucs Model (if not already loaded)
@@ -62,7 +66,21 @@ def extract_single_file(audio_path, output_dir="/home/jovyan/aman_ws/stt/LIT-int
     return speech_path, noise_path
 
 
-def process_audio_list_one_by_one(audio_paths, output_dir="/home/jovyan/aman_ws/stt/LIT-intent-training/data/extracted_noise"):
+def process_audio_directory(input_dir, output_dir=OUTPUT_NOISE_DIR):
+    if not os.path.exists(input_dir):
+        raise FileNotFoundError(f"Input directory does not exist: {input_dir}")
+
+    # Gather all supported audio files from input directory
+    audio_paths = [
+        os.path.join(input_dir, f)
+        for f in os.listdir(input_dir)
+        if f.lower().endswith(VALID_AUDIO_EXTENSIONS)
+    ]
+
+    if not audio_paths:
+        print(f"No audio files found in {input_dir}")
+        return []
+
     # Load model once and reuse across iterations
     model = get_model('htdemucs')
     model.eval()
@@ -70,14 +88,18 @@ def process_audio_list_one_by_one(audio_paths, output_dir="/home/jovyan/aman_ws/
         model.cuda()
 
     extracted_files = []
-    for path in audio_paths:
+    
+    # Process files one by one with progress bar
+    for path in tqdm(audio_paths, desc="Extracting audio stems"):
         try:
             sp, np_path = extract_single_file(path, output_dir=output_dir, model=model)
             extracted_files.append({"speech": sp, "noise": np_path})
-            print(f"Processed: {os.path.basename(path)}")
         except Exception as e:
-            print(f"Failed to process {path}: {e}")
+            print(f"\nFailed to process {os.path.basename(path)}: {e}")
 
     return extracted_files
 
 
+# Example Usage:
+INPUT_AUDIO_DIR = '/mnt/HDD8TB/aman_ws/stt/LIT-intent-training/data/August_data/user_utterances'
+extracted_results = process_audio_directory(INPUT_AUDIO_DIR)

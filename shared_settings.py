@@ -59,6 +59,33 @@ SETTINGS = {
             "classify_max_concurrency": 15,
         },
     },
+    "data_prep": {
+        "llm_provider": "gemini",
+        # Transcripts are classified in batches (one LLM call per batch).
+        # Gemini's structured-output parsing gets unreliable above ~50
+        # items per call for text-only prompts.
+        "generation": {
+            "batch_size": 50,
+            "max_concurrency": 1,
+            "max_retries": 2,
+            "retry_delay_s": 3.0,
+        },
+        "relabel_text": {
+            "batch_size": 50,
+            "max_concurrency": 1,
+            "max_retries": 4,
+            "retry_delay_s": 2.0,
+        },
+        # Each item here sends its full audio clip to the model, so batches
+        # must be much smaller than the text-only tasks above or structured
+        # output truncates and fails to parse.
+        "relabel_multimodal": {
+            "batch_size": 10,
+            "max_concurrency": 10,
+            "max_retries": 4,
+            "retry_delay_s": 2.0,
+        },
+    },
     "training": {
         "dataset_repo": "kapturecx/call-transcript-intent-data-v2",
         "experiment_version": "v6-eval2",

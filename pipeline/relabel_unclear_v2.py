@@ -13,6 +13,7 @@ from google.genai import types
 from google.oauth2 import service_account
 
 from . import config
+from intent_taxonomy import INTENT_SET
 from .relabel_unclear_prompt import SYSTEM_PROMPT
 
 
@@ -91,25 +92,7 @@ GEMINI_MODEL = config.GEMINI_MODEL
 # CLOSED TAXONOMY
 # ============================================================
 
-INTENTS = {
-    "AFFIRMATIVE_ACKNOWLEDGEMENT",
-    "NEGATIVE_ACKNOWLEDGEMENT",
-    "CONTINUE_CONVERSATION",
-    "IDENTITY_CONFIRMED",
-    "THIRD_PARTY_AVAILABLE",
-    "THIRD_PARTY_UNAVAILABLE",
-    "PAY_NOW_AGREE",
-    "PAY_LATER_AGREE",
-    "PAID_ALREADY",
-    "REFUSE_TO_PAY",
-    "NO_PAYMENT_REASON",
-    "END_CALL",
-    "DO_NOT_CALL",
-    "CALL_DEFER",
-    "WRONG_NUMBER",
-    "BACKCHANNEL_OR_NOISE",
-    "UNCLEAR_INPUT",
-}
+INTENTS = INTENT_SET
 
 
 # ============================================================

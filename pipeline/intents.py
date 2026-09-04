@@ -182,6 +182,9 @@ class _BaseClassifier:
         return _reconcile_batch(parsed, len(transcripts), self.name)
 
 
+import unicodedata
+from google.genai import types
+
 class GeminiIntentClassifier(_BaseClassifier):
     """Gemini on Vertex AI. Default backend."""
 
@@ -207,13 +210,14 @@ class GeminiIntentClassifier(_BaseClassifier):
         self.model = model
         self.system_prompt = build_system_prompt()
 
-    def generate_structured(self, system_prompt, user_prompt, response_schema, temperature=0.0):
+    def generate_structured(self, system_prompt, user_prompt, response_schema, temperature=0.7):
         """Run one structured-output call. Returns the parsed pydantic object."""
         try:
             resp = self.client.models.generate_content(
                 model=self.model,
-                contents=f"{system_prompt}\n\n{user_prompt}",
+                contents=user_prompt,
                 config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
                     response_mime_type="application/json",
                     response_schema=response_schema,
                     temperature=temperature,
@@ -222,10 +226,23 @@ class GeminiIntentClassifier(_BaseClassifier):
             )
         except Exception as e:
             raise ClassificationError(f"gemini call failed: {e}") from e
-        if resp.parsed is None:
-            raise ClassificationError(f"gemini returned unparseable response: {resp.text!r}")
-        return resp.parsed
 
+        # 1. Primary path: Native SDK auto-parsing succeeded
+        if resp.parsed is not None:
+            return resp.parsed
+
+        # 2. Fallback path: Fix non-breaking spaces (\u00a0) breaking standard JSON parsers
+        if resp.text:
+            try:
+                cleaned_text = resp.text.replace("\u00a0", " ").strip()
+                cleaned_text = unicodedata.normalize("NFC", cleaned_text)
+                return response_schema.model_validate_json(cleaned_text)
+            except Exception as e:
+                raise ClassificationError(
+                    f"gemini returned unparseable response: {resp.text!r}"
+                ) from e
+
+        raise ClassificationError("gemini returned empty response")
 
 class OpenAIIntentClassifier(_BaseClassifier):
     """Alternative backend, selected with --use-openai. Reads OPENAI_API_KEY

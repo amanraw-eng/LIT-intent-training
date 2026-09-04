@@ -35,6 +35,7 @@ import random
 from datasets import Audio, Dataset, Features, Value, concatenate_datasets, load_dataset
 from huggingface_hub import HfApi
 
+from dataset_paths import resolve_chunk_path
 from . import config
 
 FEATURES = Features(
@@ -56,7 +57,7 @@ FEATURES = Features(
 )
 
 
-def _iter_records(data_path, limit=None):
+def _iter_records(data_path, limit=None, audio_dir=None):
     n = 0
     with open(data_path, encoding="utf-8") as f:
         for line in f:
@@ -65,22 +66,23 @@ def _iter_records(data_path, limit=None):
                 continue
             rec = json.loads(line)
             chunk_path = rec.pop("chunk_path")
-            if not os.path.exists(chunk_path):
+            audio_path = resolve_chunk_path(chunk_path, audio_dir)
+            if not audio_path.exists():
                 print(f"[push_to_hub] WARNING: missing audio file, skipping: {chunk_path}")
                 continue
             rec["id"] = f"{rec['conversation_id']}_{rec['chunk_index']}"
-            rec["audio"] = chunk_path
+            rec["audio"] = str(audio_path)
             yield rec
             n += 1
             if limit is not None and n >= limit:
                 return
 
 
-def build_dataset(data_path, limit=None):
-    return Dataset.from_generator(lambda: _iter_records(data_path, limit=limit), features=FEATURES)
+def build_dataset(data_path, limit=None, audio_dir=None):
+    return Dataset.from_generator(lambda: _iter_records(data_path, limit=limit, audio_dir=audio_dir), features=FEATURES)
 
 
-def _iter_records_filtered(data_path, allowed_chunk_paths):
+def _iter_records_filtered(data_path, allowed_chunk_paths, audio_dir=None):
     with open(data_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -90,17 +92,18 @@ def _iter_records_filtered(data_path, allowed_chunk_paths):
             chunk_path = rec.pop("chunk_path")
             if chunk_path not in allowed_chunk_paths:
                 continue
-            if not os.path.exists(chunk_path):
+            audio_path = resolve_chunk_path(chunk_path, audio_dir)
+            if not audio_path.exists():
                 print(f"[push_to_hub] WARNING: missing audio file, skipping: {chunk_path}")
                 continue
             rec["id"] = f"{rec['conversation_id']}_{rec['chunk_index']}"
-            rec["audio"] = chunk_path
+            rec["audio"] = str(audio_path)
             yield rec
 
 
-def build_dataset_filtered(data_path, allowed_chunk_paths):
+def build_dataset_filtered(data_path, allowed_chunk_paths, audio_dir=None):
     return Dataset.from_generator(
-        lambda: _iter_records_filtered(data_path, allowed_chunk_paths), features=FEATURES
+        lambda: _iter_records_filtered(data_path, allowed_chunk_paths, audio_dir=audio_dir), features=FEATURES
     )
 
 
@@ -195,7 +198,7 @@ def _push_readme(output_dir, repo_id, num_rows, token):
     )
 
 
-def push(output_dir=config.OUTPUT_DIR, repo_id=None, private=True, split="train", limit=None, token=None):
+def push(output_dir=config.OUTPUT_DIR, repo_id=None, private=True, split="train", limit=None, token=None, audio_dir=None):
     repo_id = repo_id or config.HF_REPO_ID
     if not repo_id:
         raise ValueError("no repo_id given - pass --repo-id or set HF_REPO_ID in .env")
@@ -206,7 +209,7 @@ def push(output_dir=config.OUTPUT_DIR, repo_id=None, private=True, split="train"
         raise FileNotFoundError(data_path)
 
     print(f"[push_to_hub] building dataset from {data_path}" + (f" (limit={limit})" if limit else ""))
-    ds = build_dataset(data_path, limit=limit)
+    ds = build_dataset(data_path, limit=limit, audio_dir=audio_dir)
     print(f"[push_to_hub] {len(ds)} rows, features: {list(ds.features.keys())}")
 
     print(f"[push_to_hub] pushing to {repo_id} (private={private}, split={split})...")
@@ -232,7 +235,7 @@ def _dedupe_keep_first(ds, key="id"):
     return ds.filter(_keep, input_columns=[key])
 
 
-def append(output_dir=config.OUTPUT_DIR_V2, repo_id=None, split="train", limit=None, token=None):
+def append(output_dir=config.OUTPUT_DIR_V2, repo_id=None, split="train", limit=None, token=None, audio_dir=None):
     """Append output_dir's data.jsonl onto a dataset ALREADY pushed to the Hub.
 
     Downloads the current live dataset, concatenates the new rows, de-dupes by
@@ -254,7 +257,7 @@ def append(output_dir=config.OUTPUT_DIR_V2, repo_id=None, split="train", limit=N
     print(f"[push_to_hub] existing: {len(existing_ds)} rows")
 
     print(f"[push_to_hub] building new rows from {data_path}" + (f" (limit={limit})" if limit else ""))
-    new_ds = build_dataset(data_path, limit=limit)
+    new_ds = build_dataset(data_path, limit=limit, audio_dir=audio_dir)
     print(f"[push_to_hub] new: {len(new_ds)} rows")
 
     combined = concatenate_datasets([existing_ds, new_ds])
@@ -295,6 +298,7 @@ def delete_split(repo_id, split, token=None):
 
 def split_and_push(
     output_dir=config.OUTPUT_DIR_V3,
+    audio_dir=None,
     repo_id=None,
     eval_size=1000,
     val_size=10000,
@@ -333,7 +337,7 @@ def split_and_push(
     counts = {}
     for split_name, allowed in (("eval", eval_paths), ("validation", val_paths), ("train", train_paths)):
         print(f"[push_to_hub] building '{split_name}' ({len(allowed)} rows)...")
-        ds = build_dataset_filtered(data_path, allowed)
+        ds = build_dataset_filtered(data_path, allowed, audio_dir=audio_dir)
         print(f"[push_to_hub] pushing '{split_name}' ({len(ds)} rows) to {repo_id}...")
         ds.push_to_hub(repo_id, private=private, split=split_name, token=token)
         counts[split_name] = len(ds)
@@ -377,6 +381,7 @@ def main():
         "--split", default=None, help="default: v1/v2/v3 based on --output-dir, else 'train'"
     )
     parser.add_argument("--limit", type=int, default=None, help="only include the first N rows")
+    parser.add_argument("--audio-dir", default=None, help="audio folder for relative chunk_path values; defaults to <output-dir>/audio")
     parser.add_argument(
         "--dry-run", action="store_true", help="build the dataset locally and print a sample - no network calls"
     )
@@ -404,6 +409,7 @@ def main():
         help="comma-separated split names to delete after --split-final pushes the new ones",
     )
     args = parser.parse_args()
+    audio_dir = args.audio_dir or os.path.join(args.output_dir or (config.OUTPUT_DIR_V2 if args.append else config.OUTPUT_DIR), "audio")
 
     if args.delete_split:
         if not args.repo_id and not config.HF_REPO_ID:
@@ -420,6 +426,7 @@ def main():
             seed=args.seed,
             delete_old_splits=[s.strip() for s in args.delete_old_splits.split(",") if s.strip()],
             private=not args.public,
+            audio_dir=audio_dir,
         )
         print(f"[push_to_hub] result -> {result}")
         return
@@ -429,7 +436,7 @@ def main():
 
     if args.dry_run:
         data_path = os.path.join(output_dir, config.DATA_FILENAME)
-        ds = build_dataset(data_path, limit=args.limit or 5)
+        ds = build_dataset(data_path, limit=args.limit or 5, audio_dir=audio_dir)
         print(ds)
         print("\nsample row 0:")
         print(ds[0])
@@ -441,6 +448,7 @@ def main():
             repo_id=args.repo_id,
             split=split,
             limit=args.limit,
+            audio_dir=audio_dir,
         )
     else:
         result = push(
@@ -449,6 +457,7 @@ def main():
             private=not args.public,
             split=split,
             limit=args.limit,
+            audio_dir=audio_dir,
         )
     print(f"[push_to_hub] result -> {result}")
 

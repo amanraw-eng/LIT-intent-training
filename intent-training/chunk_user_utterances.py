@@ -16,9 +16,9 @@ model, utils = torch.hub.load(
 
 (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks) = utils
 
-INPUT_DIR = "user_utterances"
-OUTPUT_DIR = "{BASE_DIR}/data/example_audios"
-MANIFEST_FILE = "{BASE_DIR}/data/user_example_chunks_manifest.json"
+INPUT_DIR = "/mnt/HDD8TB/aman_ws/stt/LIT-intent-training/data/August_data/user_utterances"
+OUTPUT_DIR = "/mnt/HDD8TB/aman_ws/stt/LIT-intent-training/data/August_data/user_chunks"
+MANIFEST_FILE = "/mnt/HDD8TB/aman_ws/stt/LIT-intent-training/data/August_data/user_chunks_manifest.json"
 TARGET_SAMPLE_RATE = 16000  # Silero VAD operates natively at 16000 Hz
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)

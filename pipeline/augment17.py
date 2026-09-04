@@ -8,20 +8,22 @@ import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import soundfile as sf
 from pydantic import BaseModel
 
 from . import config
-from .intents import IntentClassifier, OpenAIIntentClassifier
+from .intents import GeminiIntentClassifier, OpenAIIntentClassifier
 from .noise_bank import augment as noise_augment
 from .noise_bank import extract_noise_donors
 from .tts_client import tts_with_retry
 
-# Explicit paths requested
-DEFAULT_OUTPUT_AUDIO_DIR = "/home/jovyan/aman_ws/stt/LIT-intent-training/data/augmented_data/audio"
-DEFAULT_JSONL_PATH = "/home/jovyan/aman_ws/stt/LIT-intent-training/data/augmented_data/updated_augmented_data17.jsonl"
-DEFAULT_VC_SAMPLES_DIR = "/home/jovyan/aman_ws/stt/LIT-intent-training/data/VC_samples"
+# RUN SETTINGS (edit shared_settings.py [pipeline.augmented17])
+_AUGMENTED17 = config.section("pipeline")["augmented17"] if hasattr(config, "section") else {}
+DEFAULT_OUTPUT_AUDIO_DIR = str(config.BASE_DIR / _AUGMENTED17.get("data_dir", "data/augmented_data") / "audio")
+DEFAULT_JSONL_PATH = str(config.BASE_DIR / _AUGMENTED17.get("data_dir", "data/augmented_data") / _AUGMENTED17.get("final_jsonl", "updated_augmented_data17.jsonl"))
+DEFAULT_VC_SAMPLES_DIR = str(config.VC_SAMPLES_DIR)
 
 
 class GeneratedSentences(BaseModel):
@@ -323,7 +325,7 @@ async def run(
     else:
         print(f"[augment] No audio samples found in {vc_dir} - fallback to default TTS_VOICE_ID")
 
-    classifier = OpenAIIntentClassifier(model=model) if use_openai else IntentClassifier()
+    classifier = OpenAIIntentClassifier(model=model) if use_openai else GeminiIntentClassifier()
     print(f"[augment] sentence-generation backend: {classifier.name} ({classifier.model})")
 
     sem = asyncio.Semaphore(tts_concurrency)
@@ -342,7 +344,7 @@ async def run(
 
             async def _do_one(text):
                 rec_uuid = uuid.uuid4().hex[:12]
-                out_path = audio_dir / f"{intent_name}_{rec_uuid}.wav"
+                out_path = f"{intent_name}_{rec_uuid}.wav"
                 ok, info = await _synthesize_and_augment_one(
                     text, out_path, sem, donors, rng, voice_paths=voice_paths, speed_range=speed_range
                 )
@@ -363,7 +365,7 @@ async def run(
                     "oid": f"synthetic_{uuid.uuid4().hex}",
                     "conversation_id": f"synthetic_{out_path.stem}",
                     "recording_url": "",
-                    "chunk_path": str(out_path),
+                    "chunk_path": out_path.relative_to(audio_dir).as_posix(),
                     "chunk_index": 0,
                     "start_ms": 0.0,
                     "end_ms": round(duration_s * 1000, 1),

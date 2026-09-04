@@ -3,6 +3,7 @@ import json
 import os
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import mlflow
 import pytorch_lightning as pl
@@ -17,32 +18,32 @@ from pytorch_lightning.loggers import MLFlowLogger
 from torch.utils.data import DataLoader, Dataset
 from whisper.audio import N_SAMPLES, log_mel_spectrogram, pad_or_trim
 
-from experiment_config import EXPERIMENT_VERSION_ENV, get_experiment_paths
+from dataset_paths import resolve_chunk_path
+from experiment_config import EXPERIMENT_VERSION_ENV, PROJECT_ROOT, get_experiment_paths, section
 from model import WhisperIntentClassification
 
-# Load environment variables
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
-
 # ============================================================
-# IN-FILE HYPERPARAMETERS & PATHS
+# COMMON SETTINGS (edit shared_settings.py)
 # ============================================================
-SEED = 100
-GPU_DEVICE = "0"
-
-# Dataset Paths
-DATA_DIR = "/home/jovyan/aman_ws/stt/LIT-intent-training/data/"
-JSONL_DATA_PATH = f"/home/jovyan/aman_ws/stt/LIT-intent-training/data/augmented_data/updated_augmented_data17.jsonl"
-
-# Model & Training Configuration
-WHISPER_SIZE = "small"          # Choices: "tiny", "base", "small", "medium"
-LEARNING_RATE = 1e-5
-WEIGHT_DECAY = 1e-2
+_TRAINING = section("training")
+_AUGMENTED17 = _TRAINING["augmented17"]
+SEED = _TRAINING["seed"]
+GPU_DEVICE = _TRAINING["gpu_device"]
+DATA_DIR = str(PROJECT_ROOT / section("project")["data_dir"])
+JSONL_DATA_PATH = str(PROJECT_ROOT / _AUGMENTED17["jsonl_data_path"])
+DEFAULT_AUDIO_DIR = str(PROJECT_ROOT / "data/augmented_data/audio")
+WHISPER_SIZE = _TRAINING["whisper_size"]
+LEARNING_RATE = _TRAINING["learning_rate"]
+WEIGHT_DECAY = _TRAINING["weight_decay"]
+# ============================================================
+# SCRIPT-SPECIFIC RUN OVERRIDES (edit here for this augmented-17 run)
+# ============================================================
 BATCH_SIZE = 16
 NUM_WORKERS = 4
 MAX_EPOCHS = 15
 PATIENCE = 5
-PRECISION = "16-mixed"          # GPU speedup: "16-mixed", "bf16-mixed", or 32
-ACCUMULATE_GRAD_BATCHES = 2    # Effective batch size = BATCH_SIZE * ACCUMULATE_GRAD_BATCHES
+PRECISION = "16-mixed"
+ACCUMULATE_GRAD_BATCHES = 2
 
 # Reproducibility
 pl.seed_everything(SEED)
@@ -54,16 +55,17 @@ os.environ["CUDA_VISIBLE_DEVICES"] = GPU_DEVICE
 # LOCAL JSONL DATASET & COLLATOR
 # ============================================================
 class LocalAudioIntentDataset(Dataset):
-    def __init__(self, records, intent_to_idx):
+    def __init__(self, records, intent_to_idx, audio_dir):
         self.records = records
         self.intent_to_idx = intent_to_idx
+        self.audio_dir = audio_dir
 
     def __len__(self):
         return len(self.records)
 
     def __getitem__(self, idx):
         item = self.records[idx]
-        audio_path = item["chunk_path"]
+        audio_path = resolve_chunk_path(item["chunk_path"], self.audio_dir)
         intent_str = item["intent"]
         label_idx = self.intent_to_idx[intent_str]
 
@@ -163,6 +165,10 @@ if __name__ == "__main__":
         help=f"Experiment version (defaults to {EXPERIMENT_VERSION_ENV} or v5)",
     )
     parser.add_argument(
+        "--audio-dir", default=DEFAULT_AUDIO_DIR,
+        help="Folder containing audio files referenced by relative chunk_path values",
+    )
+    parser.add_argument(
         "--ckpt-path",
         type=str,
         default=None,
@@ -196,7 +202,7 @@ if __name__ == "__main__":
         for line in f:
             if not line.strip(): continue
             rec = json.loads(line)
-            if Path(rec.get("chunk_path", "")).exists():
+            if resolve_chunk_path(rec.get("chunk_path", ""), args.audio_dir).exists():
                 valid_records.append(rec)
 
     print(f"Loaded {len(valid_records)} valid records with existing audio files.")
@@ -227,8 +233,8 @@ if __name__ == "__main__":
     )
 
     # DataLoaders
-    train_dataset = LocalAudioIntentDataset(train_records, intent_to_idx)
-    val_dataset = LocalAudioIntentDataset(val_records, intent_to_idx)
+    train_dataset = LocalAudioIntentDataset(train_records, intent_to_idx, args.audio_dir)
+    val_dataset = LocalAudioIntentDataset(val_records, intent_to_idx, args.audio_dir)
 
     trainloader = DataLoader(
         train_dataset,

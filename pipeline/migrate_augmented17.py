@@ -9,113 +9,59 @@ import shutil
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
-from dotenv import load_dotenv
+from shared_config import PROJECT_ROOT, load_environment, project_path, section
 from google import genai
 from google.genai import types
 from google.oauth2 import service_account
 
 
 # ============================================================
-# PATHS
+# COMMON SETTINGS (edit shared_settings.py)
 # ============================================================
-
-PROJECT_ROOT = Path(
-    "/home/jovyan/aman_ws/stt/LIT-intent-training"
-)
-
-DATA_DIR = (
-    PROJECT_ROOT
-    / "data"
-    / "augmented_data"
-)
-
-INPUT_JSONL = (
-    DATA_DIR
-    / "data.jsonl"
-)
-
-# STEP 1 OUTPUT
-PATH_UPDATED_JSONL = (
-    DATA_DIR
-    / "path_updated_augmented_data17.jsonl"
-)
-
-# STEP 2 OUTPUT
-FINAL_JSONL = (
-    DATA_DIR
-    / "updated_augemented_data17.jsonl"
-)
-
-CHECKPOINT_JSONL = (
-    DATA_DIR
-    / "updated_augemented_data17_checkpoint.jsonl"
-)
-
-ERROR_JSONL = (
-    DATA_DIR
-    / "updated_augemented_data17_errors.jsonl"
-)
-
-AUDIO_DIR = (
-    DATA_DIR
-    / "audio"
-)
+load_environment(legacy_env=Path(__file__).resolve().parent / ".env")
+_AUGMENTED17 = section("pipeline")["augmented17"]
+DATA_DIR = PROJECT_ROOT / _AUGMENTED17["data_dir"]
+INPUT_JSONL = DATA_DIR / _AUGMENTED17["input_jsonl"]
+PATH_UPDATED_JSONL = DATA_DIR / _AUGMENTED17["path_updated_jsonl"]
+FINAL_JSONL = DATA_DIR / _AUGMENTED17["final_jsonl"]
+CHECKPOINT_JSONL = DATA_DIR / _AUGMENTED17["checkpoint_jsonl"]
+ERROR_JSONL = DATA_DIR / _AUGMENTED17["error_jsonl"]
+AUDIO_DIR = DATA_DIR / "audio"
 
 
 # ============================================================
 # PATH REWRITE
 # ============================================================
 
-OLD_AUDIO_PREFIX = (
-    "/mnt/HDD8TB/aman_ws/stt/data/"
-    "call_trascript_intent_data_augmented/audio"
-)
-
-NEW_AUDIO_PREFIX = (
-    "/home/jovyan/aman_ws/stt/LIT-intent-training/"
-    "data/augmented_data/audio"
-)
+OLD_AUDIO_PREFIX = _AUGMENTED17["old_audio_prefix"]
+NEW_AUDIO_PREFIX = _AUGMENTED17["new_audio_prefix"] or str(AUDIO_DIR)
 
 
 # ============================================================
 # GEMINI
 # ============================================================
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = section("pipeline")["gemini_model"]
 
-GEMINI_LOCATION = os.getenv(
-    "GEMINI_LOCATION",
-    "us-central1",
-)
+GEMINI_LOCATION = os.getenv("GEMINI_LOCATION", section("pipeline")["gemini_location"])
 
+# ============================================================
+# SCRIPT-SPECIFIC RUN OVERRIDES (edit here for this migration)
+# ============================================================
 BATCH_SIZE = 20
 MAX_CONCURRENCY = 30
 MAX_OUTPUT_TOKENS = 4096
-
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 2.0
 
 
 # ============================================================
-# ENV
+# SECRETS
 # ============================================================
 
-THIS_DIR = Path(
-    __file__
-).resolve().parent
-
-load_dotenv(
-    THIS_DIR / ".env"
-)
-
-load_dotenv(
-    PROJECT_ROOT / ".env"
-)
-
-GEMINI_KEY_PATH = os.getenv(
-    "GEMINI_KEY_PATH"
-)
+GEMINI_KEY_PATH = project_path(os.getenv("GEMINI_KEY_PATH", ".secrets/gemini-service-account.json"))
 
 
 # ============================================================

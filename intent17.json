@@ -1,0 +1,24 @@
+{
+  "version": "17-intent-v1",
+  "context": "Hindi/Hinglish customer utterances in Indian loan, EMI, and payment collection calls. Classify only the current utterance; do not infer missing conversation context.",
+  "fallback_intent": "UNCLEAR_INPUT",
+  "intents": [
+    {"name":"AFFIRMATIVE_ACKNOWLEDGEMENT","definition":"Generic positive acknowledgement or acceptance with no more specific meaning.","examples":["हाँ","जी","हाँ जी","ठीक है","बिल्कुल","हम्म"],"notes":"Do not infer what is accepted. Specific meaning overrides this label."},
+    {"name":"NEGATIVE_ACKNOWLEDGEMENT","definition":"Generic negative acknowledgement or denial with no more specific meaning.","examples":["नहीं","ना","जी नहीं","बिल्कुल नहीं"],"notes":"Specific meaning overrides this label."},
+    {"name":"CONTINUE_CONVERSATION","definition":"Customer clearly asks, permits, or prompts the agent to continue speaking or explaining.","examples":["हाँ जी, बताइए","आगे बोलिए","कहिए","और बताइए"],"notes":"A bare acknowledgement is not this intent."},
+    {"name":"IDENTITY_CONFIRMED","definition":"Customer explicitly confirms they are the intended person.","examples":["हाँ मैं ही हूँ","मैं ही बोल रहा हूँ","Yes, this is me","Yes, speaking"],"notes":"हाँ alone is not identity confirmation."},
+    {"name":"THIRD_PARTY_AVAILABLE","definition":"Customer says the intended person is available, coming to the phone, or is being handed the phone.","examples":["फोन दे रहा हूँ","उनको बुलाता हूँ","वो आ गए हैं"]},
+    {"name":"THIRD_PARTY_UNAVAILABLE","definition":"Customer says the intended person is unavailable or cannot talk now.","examples":["वो अभी नहीं हैं","वो बाहर हैं","अभी बात नहीं हो सकती"],"notes":"An explicit request to call later is CALL_DEFER."},
+    {"name":"PAY_NOW_AGREE","definition":"Clear commitment to make payment immediately or now.","examples":["अभी payment कर देता हूँ","तुरंत pay कर देता हूँ"],"notes":"Requires payment action and immediate timing."},
+    {"name":"PAY_LATER_AGREE","definition":"Clear commitment to make payment later with future timing.","examples":["कल payment कर दूंगा","शाम तक कर दूंगा","अगले हफ्ते payment कर दूंगा"],"notes":"Maybe, try, or देखता हूँ are UNCLEAR_INPUT."},
+    {"name":"PAID_ALREADY","definition":"Customer clearly says payment has already been completed.","examples":["मैंने payment कर दी है","payment हो गई है","पैसे जमा कर दिए हैं"]},
+    {"name":"REFUSE_TO_PAY","definition":"Clear refusal or unwillingness to pay without giving a reason.","examples":["नहीं दूंगा","payment नहीं करूंगा","पैसे नहीं दूंगा"],"notes":"If a reason for inability or delay is given, use NO_PAYMENT_REASON."},
+    {"name":"NO_PAYMENT_REASON","definition":"Clear reason for not paying or payment delay.","examples":["पैसे नहीं हैं","salary नहीं आई","bank issue है","medical emergency है"]},
+    {"name":"END_CALL","definition":"Customer explicitly ends the current call.","examples":["बाय","ठीक है बाय","अलविदा","चलता हूँ"],"notes":"ठीक है alone is AFFIRMATIVE_ACKNOWLEDGEMENT."},
+    {"name":"DO_NOT_CALL","definition":"Customer asks not to be called or contacted again.","examples":["दोबारा फोन मत करना","इस नंबर पर कॉल मत करना"]},
+    {"name":"CALL_DEFER","definition":"Customer explicitly asks the caller to call or contact later.","examples":["बाद में कॉल करना","कल फोन करना","अभी busy हूँ बाद में कॉल करिए"]},
+    {"name":"WRONG_NUMBER","definition":"Customer clearly says the number or person is wrong, or that the intended person does not live here.","examples":["गलत नंबर है","यहाँ ऐसा कोई नहीं रहता","मैं वो नहीं हूँ"]},
+    {"name":"BACKCHANNEL_OR_NOISE","definition":"Clearly non-semantic sound, noise, cough, breathing, or meaningless vocalization.","examples":["[cough]","[background noise]","[breathing]"],"notes":"Meaningful हाँ or जी is normally AFFIRMATIVE_ACKNOWLEDGEMENT, not noise."},
+    {"name":"UNCLEAR_INPUT","definition":"Safe fallback for ambiguous, incomplete, context-dependent, unreliable, or out-of-taxonomy utterances.","examples":["हाँ बोलिए","मुझे help चाहिए","कैसे करूँ","देखता हूँ"],"notes":"Use whenever meaningful doubt remains; false positives are worse."}
+  ]
+}

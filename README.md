@@ -2,6 +2,30 @@
 
 Multimodal Hindi/Hinglish customer utterance dataset for loan/EMI/payment call intent classification.
 
+## Configuration
+
+- Edit [`shared_settings.py`](shared_settings.py) for non-secret, versioned settings such as paths, models, GPU choice, and training parameters.
+- Copy [`.env.example`](.env.example) to a repository-root `.env` for credentials and machine-specific values. `.env` is ignored by Git.
+- Store the Gemini Vertex service-account JSON at `.secrets/gemini-service-account.json`, then keep `GEMINI_KEY_PATH=.secrets/gemini-service-account.json` in `.env`.
+- Existing `pipeline/.env` and `intent-training/.env` files remain supported as a migration fallback; the root `.env` takes priority.
+- The main pipeline, 17-intent migration/relabel/augmentation scripts, and training entry points read common settings from these shared files. Uncommon knobs are grouped in a `SCRIPT-SPECIFIC RUN OVERRIDES` block at the top of each script.
+## Portable JSONL audio paths
+
+Store `chunk_path` relative to the audio folder, for example `PAY_NOW_AGREE_001.wav`, never as an absolute machine path. Convert an existing manifest without overwriting it:
+
+```bash
+python -m pipeline.jsonl_tools make-portable --input data.jsonl --output data.portable.jsonl --audio-dir /path/to/audio
+```
+
+Use the manifest elsewhere by providing the local audio folder: `python -m pipeline.push_to_hub --output-dir /path/to/dataset --audio-dir /new/path/audio` or `python intent-training/train_augmented.py --audio-dir /new/path/audio`.
+
+Analyze rows, intent counts, total hours, and a `split` field when present:
+
+```bash
+python -m pipeline.jsonl_tools analyze --input data.portable.jsonl --audio-dir /new/path/audio
+```
+
+
 ## Dataset Summary
 
 | Metric | Value |

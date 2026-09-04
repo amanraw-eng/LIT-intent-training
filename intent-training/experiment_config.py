@@ -3,11 +3,20 @@
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from shared_config import load_environment, section
 
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-EXPERIMENT_VERSION_ENV = "v6-eval2"
-DEFAULT_EXPERIMENT_VERSION = "v6-eval2"
+load_environment(legacy_env=Path(THIS_DIR) / ".env")
+EXPERIMENT_VERSION_ENV = "INTENT_EXPERIMENT_VERSION"
+DEFAULT_EXPERIMENT_VERSION = section("training")["experiment_version"]
 
 
 @dataclass(frozen=True)

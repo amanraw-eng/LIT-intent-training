@@ -29,7 +29,7 @@ serve a different model. The repo must contain `config.json` (with
 ## Run
 
 ```bash
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn app.main:app --host 0.0.0.0 --port 4000
 ```
 
 or

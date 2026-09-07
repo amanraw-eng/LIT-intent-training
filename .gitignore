@@ -9,3 +9,5 @@ models
 wandb
 data/
 .secrets/
+.wav
+

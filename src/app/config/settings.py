@@ -24,5 +24,18 @@ class Settings(BaseSettings):
     # in API error responses.
     DEBUG_ERRORS: bool = True
 
+    # Concurrent requests are batched into a single GPU forward pass instead
+    # of one call per request. BATCH_MAX_WAIT_MS bounds how long the first
+    # request in a batch waits for others to join it before the batch is run
+    # as-is; BATCH_MAX_SIZE caps how many join regardless of wait time. Tune
+    # these against your GPU's memory/throughput once you have real traffic.
+    BATCH_MAX_SIZE: int = 16
+    BATCH_MAX_WAIT_MS: float = 10.0
+
+    # Audio decode/preprocessing (CPU-bound: spawns ffmpeg, computes a mel
+    # spectrogram) runs in a thread pool of this size, independent of and
+    # concurrent with GPU batching above. None uses Starlette/anyio's default.
+    DECODE_THREAD_POOL_SIZE: int | None = None
+
 
 settings = Settings()

@@ -29,7 +29,7 @@ serve a different model. The repo must contain `config.json` (with
 ## Run
 
 ```bash
-uv run uvicorn app.main:app --host 0.0.0.0 --port 4000 --workers 4
+uv run uvicorn app.main:app --host 0.0.0.0 --port 4000 --workers 1
 ```
 
 or
@@ -42,11 +42,40 @@ On startup the service downloads the model from Hugging Face and loads it
 onto `DEVICE` (falling back to CPU if CUDA isn't available). If loading fails, the server still starts so
 `/health` can report why, instead of crashing outright.
 
+### Scaling / concurrency
+
+Concurrent requests share batched GPU forward passes instead of each doing
+its own batch-of-1 call (see `DynamicBatcher` in
+[app/services/batching.py](app/services/batching.py)) - audio
+decode/preprocessing (CPU-bound: spawns `ffmpeg`, computes a mel
+spectrogram) runs independently in a thread pool, so it doesn't block on or
+serialize with the GPU step.
+
+Because of this, **prefer one worker process per GPU, not many** - each
+worker loads its own full copy of the model, and extra worker processes on
+the same GPU just add memory pressure and CUDA context-switching overhead
+without adding real throughput (batching within a single worker already
+gives you the concurrency). Only add workers if you have multiple GPUs (one
+worker per GPU) or you're CPU/decode-bound rather than GPU-bound.
+
+Tune via `.env`:
+
+- `BATCH_MAX_SIZE` (default `16`) / `BATCH_MAX_WAIT_MS` (default `10`) - how
+  many concurrent requests can join one GPU forward pass, and how long the
+  first one waits for others before running as-is. Raise `BATCH_MAX_SIZE`
+  and/or `BATCH_MAX_WAIT_MS` for more throughput at the cost of per-request
+  latency; lower them for latency at the cost of throughput.
+- `DECODE_THREAD_POOL_SIZE` (default: framework default, currently 40) - how
+  many audio decodes can run concurrently. Raise this if CPU/`ffmpeg`
+  decoding (not the GPU) turns out to be the bottleneck under load.
+
 ## Configuration
 
 - [app/config/settings.py](app/config/settings.py) - values that differ per
   deployment (`HF_MODEL_REPO`, `HF_TOKEN`, `HOST`, `PORT`, `LOG_LEVEL`,
-  `DEBUG_ERRORS`). Read from `.env` / the environment; env vars win.
+  `DEBUG_ERRORS`, `BATCH_MAX_SIZE`, `BATCH_MAX_WAIT_MS`,
+  `DECODE_THREAD_POOL_SIZE`). Read from `.env` / the environment; env vars
+  win.
 - [app/config/constants.py](app/config/constants.py) - fixed, code-level
   defaults not meant to vary per deployment (model type, audio duration
   limits, upload size cap, max `top_k`).

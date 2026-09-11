@@ -335,6 +335,7 @@ name = "intent-classification-api"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "anyio" },
     { name = "fastapi" },
     { name = "huggingface-hub" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -350,6 +351,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.0,<5.0" },
     { name = "fastapi", specifier = ">=0.115,<1.0" },
     { name = "huggingface-hub", specifier = ">=0.25" },
     { name = "numpy", specifier = ">=1.26" },

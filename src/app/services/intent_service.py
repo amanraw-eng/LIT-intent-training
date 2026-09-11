@@ -1,11 +1,17 @@
 """Inference service: loads the intent model and runs inference against
-uploaded audio. Logic is unchanged from the original intent-training/api.py
-IntentService - only the config/logging imports moved.
+uploaded audio.
+
+Audio decode/preprocessing (CPU-bound - spawns ffmpeg, computes a mel
+spectrogram) runs freely in a thread pool, one call per request. The GPU
+forward pass is the one thing multiple concurrent requests must not just
+pile onto one-at-a-time: it goes through a DynamicBatcher so concurrent
+requests share batched forward passes instead of each doing its own
+batch-of-1 call (see services/batching.py for why).
 """
 
 from __future__ import annotations
 
-import asyncio
+import dataclasses
 import json
 import os
 import tempfile
@@ -14,6 +20,7 @@ from contextlib import nullcontext
 import numpy as np
 import torch
 from huggingface_hub import hf_hub_download
+from starlette.concurrency import run_in_threadpool
 from whisper.audio import N_SAMPLES, load_audio, log_mel_spectrogram, pad_or_trim
 
 from ..config import (
@@ -25,7 +32,14 @@ from ..config import (
     logger,
     settings,
 )
+from .batching import DynamicBatcher
 from .whisper_model import WhisperIntentClassification
+
+
+@dataclasses.dataclass
+class _InferenceRequest:
+    mel: torch.Tensor  # [1, n_mels, N_FRAMES], already on self.device
+    top_k: int
 
 
 class IntentService:
@@ -40,7 +54,7 @@ class IntentService:
         self.num_classes: int = 0
         self.model_output_classes: int | None = None
         self.model_loaded: bool = False
-        self.inference_lock = asyncio.Lock()
+        self._batcher: DynamicBatcher[_InferenceRequest, list[dict]] | None = None
 
     # -------------------------------------------------------------------
     # Model Loading
@@ -240,21 +254,42 @@ class IntentService:
         self.model = model
         self.model_loaded = True
 
+        self._batcher = DynamicBatcher(
+            self._run_batch_inference,
+            max_batch_size=settings.BATCH_MAX_SIZE,
+            max_wait_s=settings.BATCH_MAX_WAIT_MS / 1000.0,
+        )
+        self._batcher.start()
+
         logger.info("=" * 80)
         logger.info("MODEL LOADED SUCCESSFULLY")
         logger.info("Model repo: %s", hf_repo)
         logger.info("Model type: %s", model_type)
         logger.info("Number of intents: %d", self.num_classes)
         logger.info("Device: %s", self.device)
+        logger.info(
+            "Batching: max_batch_size=%d max_wait_ms=%.1f",
+            settings.BATCH_MAX_SIZE, settings.BATCH_MAX_WAIT_MS,
+        )
         logger.info("=" * 80)
+
+    async def shutdown(self):
+        if self._batcher is not None:
+            await self._batcher.stop()
+            self._batcher = None
 
     # -------------------------------------------------------------------
     # Audio Prediction
     # -------------------------------------------------------------------
 
-    def predict_file(self, payload: bytes, suffix: str, top_k: int):
-        """Decode audio and classify intent. Returns (ranked_intents, duration)."""
-        if self.model is None:
+    async def predict(self, payload: bytes, suffix: str, top_k: int):
+        """Decode audio and classify intent. Returns (ranked_intents, duration).
+
+        Decode/preprocessing runs in a thread pool (CPU-bound, one call per
+        request - safe to run fully concurrently). The GPU forward pass goes
+        through the batcher so concurrent requests share batched calls.
+        """
+        if self.model is None or self._batcher is None:
             raise RuntimeError("Model is not loaded")
 
         if top_k < 1:
@@ -267,10 +302,8 @@ class IntentService:
             )
             top_k = self.num_classes
 
-        audio = self._decode_audio(payload, suffix)
-        duration = self._validate_duration(audio)
-        mel = self._preprocess_audio(audio)
-        ranked_intents = self._run_inference(mel, top_k)
+        mel, duration = await run_in_threadpool(self._decode_and_preprocess, payload, suffix)
+        ranked_intents = await self._batcher.submit(_InferenceRequest(mel=mel, top_k=top_k))
 
         logger.info(
             "Prediction: %s | duration=%.3fs | top_k=%d",
@@ -278,6 +311,12 @@ class IntentService:
         )
 
         return ranked_intents, duration
+
+    def _decode_and_preprocess(self, payload: bytes, suffix: str) -> tuple[torch.Tensor, float]:
+        audio = self._decode_audio(payload, suffix)
+        duration = self._validate_duration(audio)
+        mel = self._preprocess_audio(audio)
+        return mel, duration
 
     @staticmethod
     def _decode_audio(payload: bytes, suffix: str) -> np.ndarray:
@@ -321,23 +360,34 @@ class IntentService:
             logger.exception("Audio preprocessing failed")
             raise RuntimeError(f"Audio preprocessing failed: {exc}") from exc
 
-    def _run_inference(self, mel: torch.Tensor, top_k: int) -> list[dict]:
+    def _run_batch_inference(self, requests: list[_InferenceRequest]) -> list[list[dict]]:
+        """Runs ONE forward pass for the whole batch (called by the
+        DynamicBatcher - this is the only place that touches self.model, so
+        no separate lock is needed around it). Every mel is already the same
+        fixed shape (pad_or_trim to N_SAMPLES), so concatenation is always
+        valid regardless of each request's original audio length."""
         autocast_context = (
             torch.autocast(device_type="cuda", dtype=torch.float16)
             if self.device == "cuda" else nullcontext()
         )
 
+        batch_size = len(requests)
+
         try:
             with torch.inference_mode(), autocast_context:
-                logits = self.model(mel)
+                mels = torch.cat([r.mel for r in requests], dim=0)
+                logits = self.model(mels)
 
                 if logits.ndim != 2:
                     raise RuntimeError(
                         f"Unexpected model output shape: {tuple(logits.shape)}. "
                         "Expected [batch, num_classes]."
                     )
-                if logits.shape[0] != 1:
-                    raise RuntimeError(f"Unexpected batch dimension in model output: {logits.shape[0]}")
+                if logits.shape[0] != batch_size:
+                    raise RuntimeError(
+                        f"Unexpected batch dimension in model output: "
+                        f"{logits.shape[0]} (expected {batch_size})"
+                    )
 
                 output_classes = int(logits.shape[1])
                 self.model_output_classes = output_classes
@@ -349,14 +399,17 @@ class IntentService:
                         "Make sure config.json and model.bin belong to the same model."
                     )
 
-                probabilities = torch.softmax(logits, dim=1)[0]
-                scores, indices = torch.topk(probabilities, k=top_k)
+                probabilities = torch.softmax(logits, dim=1)
+
+                results = []
+                for i, request in enumerate(requests):
+                    scores, indices = torch.topk(probabilities[i], k=request.top_k)
+                    results.append(self._to_ranked_intents(scores, indices))
+                return results
 
         except Exception as exc:
-            logger.exception("MODEL INFERENCE FAILED")
+            logger.exception("MODEL INFERENCE FAILED (batch_size=%d)", batch_size)
             raise RuntimeError(f"Model inference failed: {exc}") from exc
-
-        return self._to_ranked_intents(scores, indices)
 
     def _to_ranked_intents(self, scores: torch.Tensor, indices: torch.Tensor) -> list[dict]:
         ranked_intents = []

@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from starlette.concurrency import run_in_threadpool
 
 from ...config import MAX_TOP_K, MAX_UPLOAD_BYTES, MODEL_TYPE, logger, settings
 from ...services.intent_service import service
@@ -157,10 +156,7 @@ async def create_transcription(
     k_value = _resolve_top_k(top_k)
 
     try:
-        async with service.inference_lock:
-            ranked_intents, duration = await run_in_threadpool(
-                service.predict_file, payload, suffix, k_value
-            )
+        ranked_intents, duration = await service.predict(payload, suffix, k_value)
 
     except ValueError as exc:
         logger.warning("Validation error during inference: %s", exc)

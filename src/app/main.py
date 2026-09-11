@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+import anyio
 import torch
 from fastapi import FastAPI
 
@@ -32,9 +33,21 @@ from .config import logger, settings
 from .services.intent_service import service
 
 
+def _configure_decode_thread_pool():
+    """Audio decode/preprocessing (CPU-bound: ffmpeg + mel spectrogram) runs
+    in Starlette's default thread pool, one call per request - size it
+    explicitly if configured instead of relying on anyio's default."""
+    if settings.DECODE_THREAD_POOL_SIZE is None:
+        return
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    limiter.total_tokens = settings.DECODE_THREAD_POOL_SIZE
+    logger.info("Decode thread pool size set to %d", settings.DECODE_THREAD_POOL_SIZE)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting FastAPI application")
+    _configure_decode_thread_pool()
 
     try:
         service.load()
@@ -51,6 +64,7 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down model service")
+    await service.shutdown()
     service.model = None
     service.model_loaded = False
 

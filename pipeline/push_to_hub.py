@@ -79,7 +79,13 @@ def _iter_records(data_path, limit=None, audio_dir=None):
 
 
 def build_dataset(data_path, limit=None, audio_dir=None):
-    return Dataset.from_generator(lambda: _iter_records(data_path, limit=limit, audio_dir=audio_dir), features=FEATURES)
+    # Dataset.from_generator proved non-deterministic in testing (pipeline/push_intents10.py) -
+    # repeated calls on an unchanged file occasionally dropped trailing rows with no
+    # error. Dataset.from_list on a fully-materialized record list is reliable; rows
+    # only hold small metadata + a path string (audio bytes aren't read until push
+    # time), so this stays cheap at scale.
+    records = list(_iter_records(data_path, limit=limit, audio_dir=audio_dir))
+    return Dataset.from_list(records, features=FEATURES)
 
 
 def _iter_records_filtered(data_path, allowed_chunk_paths, audio_dir=None):
@@ -102,9 +108,8 @@ def _iter_records_filtered(data_path, allowed_chunk_paths, audio_dir=None):
 
 
 def build_dataset_filtered(data_path, allowed_chunk_paths, audio_dir=None):
-    return Dataset.from_generator(
-        lambda: _iter_records_filtered(data_path, allowed_chunk_paths, audio_dir=audio_dir), features=FEATURES
-    )
+    records = list(_iter_records_filtered(data_path, allowed_chunk_paths, audio_dir=audio_dir))
+    return Dataset.from_list(records, features=FEATURES)
 
 
 def _split_chunk_paths(data_path, eval_size, val_size, seed=42):

@@ -9,3 +9,13 @@ models
 wandb
 data/
 .secrets/
+# Defense-in-depth: if HF_HOME/HF_DATASETS_CACHE ever get exported empty again,
+# huggingface_hub/datasets resolve that to a relative path and dump their
+# cache right here in the repo root instead of ~/.cache/huggingface.
+hub/
+generator/
+xet/
+*.lock
+*___*/
+.DS_Store
+.agent_harnesses.json

@@ -34,6 +34,30 @@ SETTINGS = {
             "old_audio_prefix": "",
             "new_audio_prefix": "",
         },
+        "intents10": {
+            "source_repo": "kapturecx/bolAIndia",
+            "source_config": "combined",
+            "source_split": "train",
+            # amn-raw (personal, free plan) hit its private-storage cap at
+            # ~58k rows / ~5GB - kapturecx is a paid Team-plan org with much
+            # more private storage room. amn-raw/S2I-10-v1 is left as-is
+            # (untouched, not deleted) with its rows up to that point.
+            "hf_dataset_repo": "kapturecx/S2I-10-v1",
+            # Rows are streamed and processed in fetch-batches of this size
+            # (save audio + queue transcript) before checkpointing stream
+            # position; classification itself still happens in the smaller
+            # INTENT_BATCH_SIZE sub-batches Gemini handles reliably.
+            "fetch_batch_size": 200,
+            # Push to the Hub after this many NEW finalized rows have piled up
+            # since the last push. append_incremental() (pipeline/push_intents10.py)
+            # uploads only the delta as a new shard - cost scales with this
+            # number, not total dataset size, so it's safe to keep this fairly
+            # low even once the dataset is large.
+            "push_every_rows": 2000,
+            # Number of Gemini classify_batch calls (each INTENT_BATCH_SIZE
+            # transcripts) fired concurrently via a thread pool. 1 = sequential.
+            "classify_max_concurrency": 15,
+        },
     },
     "training": {
         "dataset_repo": "kapturecx/call-transcript-intent-data-v2",

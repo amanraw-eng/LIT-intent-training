@@ -174,3 +174,34 @@ VC_REJECTED_PATH = os.path.join(DATA_DIR, "voice_clone_rejected.json")
 VC_MIN_TRANSCRIPT_CHARS = 20
 VC_MIN_DURATION_S = 3.0
 VC_DEFAULT_CLIP_SECONDS = 5.0
+
+# intents10 pipeline: relabel the already-transcribed kapturecx/bolAIndia ASR
+# dataset with the 12-intent taxonomy in intents10.json (see
+# pipeline/build_intents10.py). No transcription step - the source dataset
+# already carries a provider transcript per chunk.
+_intents10 = _settings.get("intents10", {})
+# Taxonomy evolved from the original 12-intent intents10.json (added
+# GREETING/VOICE_MAIL, split ACTION_COMMITMENT into _NOW/_LATER) - the file
+# was renamed in place to intents15.json (15 = current intent count).
+# Dataset/module names ("intents10", "S2I-10-v1") are kept as-is; they were
+# already just labels, not literal intent counts, even before this change.
+INTENTS10_TAXONOMY_PATH = os.path.join(BASE_DIR, "intents15.json")
+INTENTS10_OUTPUT_DIR = os.path.join(DATA_DIR, "intents10", "bolAIndia_subset")
+INTENTS10_AUDIO_DIRNAME = "audio"
+INTENTS10_DATA_FILENAME = "data.jsonl"
+# Transcripts saved+queued for batch classification but not yet classified -
+# durable so a stop mid-batch doesn't lose the already-saved audio/transcript.
+INTENTS10_PENDING_FILENAME = "pending_intent.jsonl"
+INTENTS10_ERRORS_FILENAME = "errors.log"
+# datasets.IterableDataset.state_dict() - lets a resumed run pick up the
+# source stream near where it left off instead of re-reading everything
+# before it just to skip already-seen chunk_ids.
+INTENTS10_STREAM_STATE_FILENAME = "stream_state.json"
+INTENTS10_PUSH_STATE_FILENAME = "push_state.json"
+INTENTS10_SOURCE_REPO = os.environ.get("INTENTS10_SOURCE_REPO", _intents10.get("source_repo", "kapturecx/bolAIndia"))
+INTENTS10_SOURCE_CONFIG = _intents10.get("source_config", "combined")
+INTENTS10_SOURCE_SPLIT = _intents10.get("source_split", "train")
+INTENTS10_HF_REPO = os.environ.get("INTENTS10_HF_REPO", _intents10.get("hf_dataset_repo", "kapturecx/S2I-10-v1"))
+INTENTS10_FETCH_BATCH_SIZE = int(_intents10.get("fetch_batch_size", 200))
+INTENTS10_PUSH_EVERY_ROWS = int(_intents10.get("push_every_rows", 1000))
+INTENTS10_CLASSIFY_MAX_CONCURRENCY = int(_intents10.get("classify_max_concurrency", 10))

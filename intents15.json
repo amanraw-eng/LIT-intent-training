@@ -1,0 +1,376 @@
+{
+    "intents": [
+      {
+        "name": "AFFIRMATIVE_ACKNOWLEDGEMENT",
+        "description": "A short, clear response that positively acknowledges, agrees with, or accepts what was just said. Use only when the utterance itself primarily functions as a simple positive acknowledgement and does not contain a request, commitment, question, or instruction.",
+        "conditions": [
+          "The user is simply saying yes, okay, agreed, or an equivalent positive acknowledgement.",
+          "The utterance must not contain a separate meaningful action, question, or request.",
+          "If the user invites the bot to continue, use CONTINUE_CONVERSATION instead.",
+          "If the user commits to performing an action, use ACTION_COMMITMENT instead."
+        ],
+        "examples": [
+          "हाँ",
+          "जी",
+          "जी हाँ",
+          "ठीक है",
+          "अच्छा ठीक है",
+          "हाँ हाँ",
+          "yes",
+          "okay",
+          "sure",
+          "alright"
+        ]
+      },
+      {
+        "name": "GREETING",
+        "description": "A standalone greeting or salutation used to greet the other party. The utterance must primarily consist of a conventional greeting phrase and must not contain a request, instruction, question, continuation cue, or other conversational content.",
+        "conditions": [
+          "Use only for a standalone greeting or salutation.",
+          "The utterance must function as a greeting by itself.",
+          "Do not use when the greeting is followed by an instruction, request, question, or conversational prompt.",
+          "Do not use for 'hello bolo', 'hello suno', or similar phrases containing an additional instruction.",
+          "Do not use repeated greeting words such as 'hello hello' when they function as an attempt to get attention; use UNCLEAR_INPUT unless another intent is clearly expressed.",
+          "Do not use for general acknowledgement such as 'जी' or 'ठीक है'.",
+          "Do not infer GREETING merely because a greeting word appears inside a longer utterance."
+        ],
+        "examples": [
+          "हेलो",
+          "हैलो",
+          "hello",
+          "hi",
+          "नमस्ते",
+          "नमस्कार",
+          "सुप्रभात",
+          "शुभ प्रभात",
+          "good morning",
+          "good afternoon",
+          "good evening",
+          "शुभ संध्या",
+          "स्वागत है",
+          "स्वागतम",
+          "प्रणाम",
+          "सलाम"
+        ]
+      },
+      {
+        "name": "NEGATIVE_ACKNOWLEDGEMENT",
+        "description": "A short, clear negative response that simply acknowledges or rejects the immediately preceding statement without expressing a separate refusal, complaint, request, or other intent.",
+        "conditions": [
+          "The utterance primarily means no, not correct, or negative acknowledgement.",
+          "Use only when the negative response itself is the main conversational function.",
+          "If the user explicitly refuses to perform an action, use ACTION_REFUSAL instead.",
+          "If the user reports a problem or disagreement with a situation, use PROBLEM_OR_COMPLAINT instead."
+        ],
+        "examples": [
+          "नहीं",
+          "जी नहीं",
+          "नहीं जी",
+          "no",
+          "nope",
+          "नहीं नहीं",
+          "not really"
+        ]
+      },
+      {
+        "name": "CONTINUE_CONVERSATION",
+        "description": "The user explicitly signals that the bot should continue speaking, explain further, proceed, or take the conversational turn.",
+        "conditions": [
+          "The user is inviting or permitting the bot to continue.",
+          "The utterance contains a conversational continuation cue rather than merely a yes/okay acknowledgement.",
+          "Use when the user effectively means 'go ahead', 'tell me', 'continue', or 'I am listening'.",
+          "Do not use for a simple yes or okay."
+        ],
+        "examples": [
+          "हाँ बताइए",
+          "जी बोलिए",
+          "हाँ बोलो",
+          "आगे बताइए",
+          "बताइए",
+          "बोलिए",
+          "जी सुन रहा हूँ",
+          "go ahead",
+          "tell me",
+          "continue"
+        ]
+      },
+      {
+        "name": "BACKCHANNEL_OR_NOISE",
+        "description": "A non-substantive vocalization, hesitation sound, conversational noise, or clearly non-semantic audio that does not communicate a meaningful user response.",
+        "conditions": [
+          "Use only when there is high confidence that the utterance carries no meaningful actionable or conversational content.",
+          "Short vocalizations such as hmm, um, uh, or similar sounds may belong here when they are clearly non-semantic.",
+          "Do not classify meaningful yes, no, okay, or other words as BACKCHANNEL_OR_NOISE.",
+          "Do not infer meaning from the surrounding conversation.",
+          "Because this class may bypass transcription completely, use a high confidence threshold."
+        ],
+        "examples": [
+          "हम्म",
+          "म्म",
+          "उम्म",
+          "अं",
+          "हूँ",
+          "hmm",
+          "umm",
+          "uh",
+          "uhh"
+        ]
+      },
+      {
+        "name": "INFORMATION_REQUEST",
+        "description": "The user asks for information, clarification, explanation, status, reason, instructions, or an answer to a question.",
+        "conditions": [
+          "The primary purpose is to obtain information or clarification.",
+          "The utterance may be phrased as a direct question or an implicit request for explanation.",
+          "Do not use when the user is asking the bot to perform an action; use ACTION_REQUEST instead.",
+          "Do not classify a statement as INFORMATION_REQUEST merely because it contains a question-like word."
+        ],
+        "examples": [
+          "क्या है?",
+          "क्या हुआ?",
+          "क्यों?",
+          "कैसे करना है?",
+          "इसका मतलब क्या है?",
+          "मुझे समझाइए",
+          "थोड़ा विस्तार से बताइए",
+          "कितना समय लगेगा?",
+          "what is this?",
+          "how does this work?",
+          "why?",
+          "can you explain?"
+        ]
+      },
+      {
+        "name": "ACTION_REQUEST",
+        "description": "The user asks the bot, system, or another party to perform an action.",
+        "conditions": [
+          "The user is requesting that something be done.",
+          "The requested action may be explicit or naturally implied.",
+          "The user is asking someone else to act, not stating that they themselves will act.",
+          "Do not use when the user merely agrees to an action.",
+          "Do not use when the user states their own future intention; use ACTION_COMMITMENT instead."
+        ],
+        "examples": [
+          "कर दीजिए",
+          "कर दो",
+          "मुझे भेज दीजिए",
+          "बंद कर दो",
+          "इसे बदल दीजिए",
+          "मुझे जोड़ दीजिए",
+          "please do it",
+          "send it to me",
+          "change this",
+          "stop it"
+        ]
+      },
+      {
+        "name": "ACTION_COMMITMENT_NOW",
+        "description": "The user explicitly states that they are performing an action now, are about to perform it immediately, or will perform it without meaningful delay.",
+        "conditions": [
+          "The action must be attributable to the user.",
+          "The utterance must explicitly indicate that the action is happening now or will happen immediately.",
+          "Use when the user communicates immediate intent such as 'doing it now', 'will do it right away', or 'already starting'.",
+          "Do not use for a future or unspecified commitment; use ACTION_COMMITMENT_LATER.",
+          "Do not use for a request directed at the bot or another person; use ACTION_REQUEST.",
+          "Do not use for a simple acknowledgement without an action."
+        ],
+        "examples": [
+          "कर रहा हूँ",
+          "अभी करता हूँ",
+          "अभी कर दूंगा",
+          "अभी कर देता हूँ",
+          "अभी कर रहा हूँ",
+          "तुरंत करूंगा",
+          "अभी कर लूंगा",
+          "बस कर ही रहा हूँ",
+          "बस करता हूँ",
+          "अभी भेजता हूँ",
+          "अभी देखता हूँ",
+          "अभी कर देता हूं",
+          "कर ही रहा हूं",
+          "right now",
+          "I'm doing it now",
+          "I'll do it right away",
+          "I'll do it now",
+          "I'm on it",
+          "doing it now"
+        ]
+      },
+      {
+        "name": "ACTION_COMMITMENT_LATER",
+        "description": "The user explicitly states that they intend or commit to performing an action in the future, without indicating that the action is being performed immediately.",
+        "conditions": [
+          "The action must be attributable to the user.",
+          "The user must express future intention, willingness, or commitment.",
+          "Use when the action is explicitly deferred or scheduled for later.",
+          "Also use for commitments where the timing is future but unspecified.",
+          "Do not use when the user explicitly says they are doing the action now or immediately; use ACTION_COMMITMENT_NOW.",
+          "Do not use for a request directed at the bot or another person; use ACTION_REQUEST.",
+          "Do not use for a simple acknowledgement without an action commitment."
+        ],
+        "examples": [
+          "मैं कर दूंगा",
+          "मैं कर लूंगा",
+          "मैं देख लूंगा",
+          "मैं बाद में कर दूंगा",
+          "मैं बाद में कर दूं chalega?",
+          "बाद में कर दूंगा",
+          "बाद में देख लूंगा",
+          "मैं भेज दूंगा",
+          "मैं बाद में भेज दूंगा",
+          "ठीक है मैं कर दूंगा",
+          "मैं कर दूंगा बाद में",
+          "I'll do it",
+          "I will do it later",
+          "I'll take care of it",
+          "I'll check later",
+          "I'll send it later"
+        ]
+      },
+      {
+        "name": "ACTION_REFUSAL",
+        "description": "The user explicitly refuses, declines, or states unwillingness to perform or accept a requested action.",
+        "conditions": [
+          "The user clearly refuses or declines an action.",
+          "The refusal must be more specific than a standalone negative acknowledgement.",
+          "Use when the user communicates unwillingness, rejection, or explicit refusal.",
+          "Do not use for a simple 'no' without an action or refusal meaning."
+        ],
+        "examples": [
+          "नहीं करूंगा",
+          "मैं नहीं करूंगा",
+          "मुझे नहीं करना",
+          "मैं ऐसा नहीं करूंगा",
+          "मैं नहीं मानता",
+          "I won't do it",
+          "I don't want to",
+          "I refuse",
+          "no, I don't want that"
+        ]
+      },
+      {
+        "name": "PROBLEM_OR_COMPLAINT",
+        "description": "The user reports a problem, failure, difficulty, error, dissatisfaction, or negative experience.",
+        "conditions": [
+          "The user communicates that something is wrong or not working.",
+          "The utterance may describe a technical issue, service problem, inconvenience, dissatisfaction, or complaint.",
+          "The intent must come from the content of the user's utterance itself.",
+          "Do not classify a simple negative acknowledgement as a complaint.",
+          "Do not use merely because the user sounds unhappy; there must be meaningful problem or complaint content."
+        ],
+        "examples": [
+          "काम नहीं कर रहा",
+          "मुझे दिक्कत हो रही है",
+          "समस्या आ रही है",
+          "ये गलत है",
+          "मुझे परेशानी हो रही है",
+          "बहुत खराब सर्विस है",
+          "ये नहीं हो रहा",
+          "there is a problem",
+          "it's not working",
+          "this is wrong",
+          "I'm having an issue"
+        ]
+      },
+      {
+        "name": "LANGUAGE_CHANGE",
+        "description": "The user explicitly requests that the conversation switch to, continue in, or return to a different language.",
+        "conditions": [
+          "The user explicitly asks to change the language of the conversation.",
+          "The request may be in any language.",
+          "Speaking in a different language by itself is not sufficient.",
+          "Do not infer a language-change request merely from the language used in the utterance.",
+          "The utterance must contain an explicit language preference or switching instruction."
+        ],
+        "examples": [
+          "हिंदी में बात करो",
+          "अंग्रेजी में बात कीजिए",
+          "English please",
+          "Can you speak Hindi?",
+          "मुझसे हिंदी में बात करें",
+          "language change करो",
+          "switch to English",
+          "I want to speak in Hindi",
+          "বাংলায় কথা বলুন"
+        ]
+      },
+      {
+        "name": "END_CONVERSATION",
+        "description": "The user clearly indicates that they want to finish or terminate the current conversation.",
+        "conditions": [
+          "The user explicitly signals that the conversation should end.",
+          "The utterance must indicate completion or a desire to stop the conversation.",
+          "Do not use merely because the user pauses or says okay.",
+          "Do not use for temporary interruption or asking the bot to wait."
+        ],
+        "examples": [
+          "बस इतना ही",
+          "अब रखता हूँ",
+          "ठीक है बाय",
+          "बाय",
+          "चलता हूँ",
+          "अब बात नहीं करनी",
+          "यही था",
+          "that's all",
+          "bye",
+          "goodbye",
+          "I have to go"
+        ]
+      },
+      {
+        "name": "UNCLEAR_INPUT",
+        "description": "The utterance cannot be confidently assigned to another intent from the user's words alone.",
+        "conditions": [
+          "Use when the utterance is ambiguous between multiple intents.",
+          "Use when the speech is incomplete or difficult to understand.",
+          "Use when meaningful intent requires previous bot context or external knowledge.",
+          "Use when confidence is below the required threshold.",
+          "When uncertain, prefer UNCLEAR_INPUT over making a potentially incorrect specific classification.",
+          "Do not use as a catch-all when another intent is clearly expressed."
+        ],
+        "examples": [
+          "देखते हैं",
+          "शायद",
+          "पता नहीं",
+          "हां शायद",
+          "ठीक...",
+          "वो...",
+          "I don't know",
+          "maybe",
+          "we'll see",
+          "not sure"
+        ]
+      },
+      {
+        "name": "VOICE_MAIL",
+        "description": "A voicemail, answering-machine, automated telephony message, or a message indicating that the intended person is unavailable to answer the call.",
+        "conditions": [
+          "Use when the utterance appears to be a voicemail or answering-machine style message rather than a normal conversational response from the intended user.",
+          "Include automated or semi-automated messages indicating that the person is unavailable, busy, cannot answer, or is not currently reachable.",
+          "Include messages asking the caller to leave a message, call later, or try again.",
+          "Do not use merely because a normal user says they are busy or unavailable.",
+          "Do not use for a normal conversational request to call later; that should fall back to UNCLEAR_INPUT unless another specific intent applies.",
+          "Do not infer VOICE_MAIL solely from background audio or poor audio quality.",
+          "When it is unclear whether the audio is a voicemail/automated message or a normal person speaking, use UNCLEAR_INPUT."
+        ],
+        "examples": [
+          "जिस व्यक्ति को आप कॉल कर रहे हैं वह अभी व्यस्त है",
+          "जिस व्यक्ति से आप बात करना चाहते हैं वह अभी उपलब्ध नहीं है",
+          "वह अभी फोन पर उपलब्ध नहीं हैं",
+          "यह व्यक्ति इस समय आपका कॉल नहीं ले सकता",
+          "अभी वह कॉल रिसीव नहीं कर सकते",
+          "वर्तमान में यह नंबर व्यस्त है",
+          "कृपया थोड़ी देर बाद कॉल करें",
+          "कृपया बीप के बाद अपना संदेश छोड़ें",
+          "कृपया संदेश रिकॉर्ड करें",
+          "आपके द्वारा डायल किया गया व्यक्ति अभी उपलब्ध नहीं है",
+          "the person you are trying to reach is unavailable",
+          "the person you are calling is currently busy",
+          "please leave a message after the beep",
+          "please try again later",
+          "the person you are trying to reach cannot take your call",
+          "this person is currently unavailable"
+        ]
+      }
+    ]
+  }

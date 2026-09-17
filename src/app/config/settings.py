@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # request in a batch waits for others to join it before the batch is run
     # as-is; BATCH_MAX_SIZE caps how many join regardless of wait time. Tune
     # these against your GPU's memory/throughput once you have real traffic.
-    BATCH_MAX_SIZE: int = 16
+    BATCH_MAX_SIZE: int = 32
     BATCH_MAX_WAIT_MS: float = 10.0
 
     # Audio decode/preprocessing (CPU-bound: spawns ffmpeg, computes a mel

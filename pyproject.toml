@@ -15,6 +15,7 @@ dependencies = [
     "torch>=2.4",
     "openai-whisper>=20231117",
     "huggingface-hub>=0.25",
+    "av>=18.1.0",
 ]
 
 [build-system]

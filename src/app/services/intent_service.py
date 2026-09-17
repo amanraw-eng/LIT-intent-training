@@ -1,27 +1,23 @@
 """Inference service: loads the intent model and runs inference against
 uploaded audio.
 
-Audio decode/preprocessing (CPU-bound - spawns ffmpeg, computes a mel
-spectrogram) runs freely in a thread pool, one call per request. The GPU
-forward pass is the one thing multiple concurrent requests must not just
-pile onto one-at-a-time: it goes through a DynamicBatcher so concurrent
-requests share batched forward passes instead of each doing its own
-batch-of-1 call (see services/batching.py for why).
+Audio decode/preprocessing runs in-memory via PyAV and PyTorch CUDA tensors.
+Dynamic batching gathers concurrent request tensors for optimal GPU compute efficiency.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import io
 import json
-import os
-import tempfile
 from contextlib import nullcontext
 
+import av
 import numpy as np
 import torch
 from huggingface_hub import hf_hub_download
 from starlette.concurrency import run_in_threadpool
-from whisper.audio import N_SAMPLES, load_audio, log_mel_spectrogram, pad_or_trim
+from whisper.audio import N_SAMPLES, log_mel_spectrogram, pad_or_trim
 
 from ..config import (
     DEVICE,
@@ -61,12 +57,7 @@ class IntentService:
     # -------------------------------------------------------------------
 
     def load(self):
-        """
-        Load config.json and model.bin from Hugging Face.
-
-        Validates the class mapping so a 17-intent model can't silently
-        be used with a 20-intent mapping or vice versa.
-        """
+        """Load config.json and model.bin from Hugging Face."""
         logger.info("=" * 80)
         logger.info("Starting intent model loading")
         logger.info("Device: %s", self.device)
@@ -144,7 +135,6 @@ class IntentService:
             ) from exc
 
         try:
-            # JSON always stores object keys as strings, so convert explicitly.
             self.idx_to_intent = {int(k): str(v) for k, v in raw_idx_to_intent.items()}
         except Exception as exc:
             raise RuntimeError(
@@ -159,24 +149,13 @@ class IntentService:
         intent_indices = sorted(self.intent_to_idx.values())
         reverse_indices = sorted(self.idx_to_intent.keys())
 
-        if intent_indices != expected_indices:
-            raise RuntimeError(
-                f"intent_to_idx contains invalid/non-contiguous indices. "
-                f"Expected {expected_indices}, got {intent_indices}"
-            )
-        if reverse_indices != expected_indices:
-            raise RuntimeError(
-                f"idx_to_intent contains invalid/non-contiguous indices. "
-                f"Expected {expected_indices}, got {reverse_indices}"
-            )
+        if intent_indices != expected_indices or reverse_indices != expected_indices:
+            raise RuntimeError("Non-contiguous indices in intent mapping config.")
 
         for intent, index in self.intent_to_idx.items():
             reverse_intent = self.idx_to_intent.get(index)
             if reverse_intent != intent:
-                raise RuntimeError(
-                    f"Intent mapping mismatch: intent_to_idx['{intent}'] = {index}, "
-                    f"but idx_to_intent['{index}'] = '{reverse_intent}'"
-                )
+                raise RuntimeError(f"Intent mapping mismatch for '{intent}'")
 
     def _log_intent_mapping(self):
         logger.info("Loaded intent mapping with %d classes", self.num_classes)
@@ -199,26 +178,17 @@ class IntentService:
             logger.exception("Failed to load model.bin")
             raise RuntimeError(f"Unable to load model checkpoint: {exc}") from exc
 
-        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-            state_dict = checkpoint["state_dict"]
-            logger.info("Checkpoint contains 'state_dict'")
-        else:
-            state_dict = checkpoint
-            logger.info("Checkpoint itself is being used as state_dict")
+        state_dict = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
 
         if not isinstance(state_dict, dict):
             raise RuntimeError("Model checkpoint does not contain a valid state_dict")
 
-        keys = list(state_dict.keys())
-        has_model_prefix = any(str(k).startswith("model.") for k in keys)
-
+        has_model_prefix = any(str(k).startswith("model.") for k in state_dict.keys())
         if has_model_prefix:
             logger.info("Detected 'model.' prefix in checkpoint keys; stripping it")
             state_dict = {
                 k[len("model."):]: v for k, v in state_dict.items() if k.startswith("model.")
             }
-        else:
-            logger.info("No 'model.' prefix detected in checkpoint")
 
         return state_dict
 
@@ -226,17 +196,14 @@ class IntentService:
         try:
             incompatible = model.load_state_dict(state_dict, strict=True)
             logger.info("Model state_dict loaded successfully")
-
             if incompatible.missing_keys:
                 logger.error("Missing keys: %s", incompatible.missing_keys)
             if incompatible.unexpected_keys:
                 logger.error("Unexpected keys: %s", incompatible.unexpected_keys)
-
         except Exception as exc:
             logger.exception("FAILED to load model state_dict")
             raise RuntimeError(
-                f"Model architecture/checkpoint mismatch. "
-                f"MODEL_TYPE='{model_type}', n_class={self.num_classes}. Original error: {exc}"
+                f"Model architecture/checkpoint mismatch. Original error: {exc}"
             ) from exc
 
     def _finalize_model(self, model, hf_repo: str, model_type: str):
@@ -250,6 +217,23 @@ class IntentService:
         if self.device == "cuda":
             torch.backends.cudnn.benchmark = True
             logger.info("CUDA enabled: %s", torch.cuda.get_device_name(0))
+
+            # Optional: Enable PyTorch 2.0+ execution graph optimization
+            if hasattr(torch, "compile"):
+                try:
+                    logger.info("Compiling model graph via torch.compile...")
+                    model = torch.compile(model, mode="reduce-overhead")
+                    logger.info("Model compiled successfully")
+                except Exception:
+                    logger.warning("torch.compile failed; falling back to eager mode execution")
+
+            # Warmup pass to capture graph and warm up CUDA context during startup
+            logger.info("Performing CUDA model warmup pass...")
+            dummy_mel = torch.zeros((1, 80, 3000), device=self.device)
+            autocast_context = torch.autocast(device_type="cuda", dtype=torch.float16)
+            with torch.inference_mode(), autocast_context:
+                _ = model(dummy_mel)
+            logger.info("CUDA warmup completed successfully")
 
         self.model = model
         self.model_loaded = True
@@ -283,12 +267,6 @@ class IntentService:
     # -------------------------------------------------------------------
 
     async def predict(self, payload: bytes, suffix: str, top_k: int):
-        """Decode audio and classify intent. Returns (ranked_intents, duration).
-
-        Decode/preprocessing runs in a thread pool (CPU-bound, one call per
-        request - safe to run fully concurrently). The GPU forward pass goes
-        through the batcher so concurrent requests share batched calls.
-        """
         if self.model is None or self._batcher is None:
             raise RuntimeError("Model is not loaded")
 
@@ -302,7 +280,7 @@ class IntentService:
             )
             top_k = self.num_classes
 
-        mel, duration = await run_in_threadpool(self._decode_and_preprocess, payload, suffix)
+        mel, duration = await run_in_threadpool(self._decode_and_preprocess, payload)
         ranked_intents = await self._batcher.submit(_InferenceRequest(mel=mel, top_k=top_k))
 
         logger.info(
@@ -312,33 +290,37 @@ class IntentService:
 
         return ranked_intents, duration
 
-    def _decode_and_preprocess(self, payload: bytes, suffix: str) -> tuple[torch.Tensor, float]:
-        audio = self._decode_audio(payload, suffix)
+    def _decode_and_preprocess(self, payload: bytes) -> tuple[torch.Tensor, float]:
+        audio = self._decode_audio(payload)
         duration = self._validate_duration(audio)
         mel = self._preprocess_audio(audio)
         return mel, duration
 
     @staticmethod
-    def _decode_audio(payload: bytes, suffix: str) -> np.ndarray:
-        file_path = None
+    def _decode_audio(payload: bytes) -> np.ndarray:
         try:
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
-                handle.write(payload)
-                file_path = handle.name
+            with av.open(io.BytesIO(payload)) as container:
+                stream = next(s for s in container.streams if s.type == "audio")
+                resampler = av.AudioResampler(
+                    format="s16p", layout="mono", rate=TARGET_SAMPLE_RATE
+                )
 
-            logger.debug("Temporary audio file created: %s", file_path)
-            return load_audio(file_path, sr=TARGET_SAMPLE_RATE)
+                audio_frames = []
+                for frame in container.decode(stream):
+                    audio_frames.extend(resampler.resample(frame))
+
+                if not audio_frames:
+                    raise ValueError("Decoded audio container yielded no audio frames.")
+
+                audio = np.concatenate(
+                    [f.to_ndarray().flatten() for f in audio_frames]
+                ).astype(np.float32) / 32768.0
+
+                return audio
 
         except Exception as exc:
-            logger.exception("Audio decoding failed")
+            logger.exception("In-memory audio decoding failed")
             raise ValueError("Unable to decode the uploaded audio.") from exc
-
-        finally:
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.unlink(file_path)
-                except Exception:
-                    logger.warning("Failed to delete temporary file: %s", file_path)
 
     @staticmethod
     def _validate_duration(audio: np.ndarray) -> float:
@@ -354,18 +336,15 @@ class IntentService:
 
     def _preprocess_audio(self, audio: np.ndarray) -> torch.Tensor:
         try:
-            samples = pad_or_trim(np.asarray(audio, dtype=np.float32), N_SAMPLES)
-            return log_mel_spectrogram(samples).unsqueeze(0).to(self.device)
+            audio_tensor = torch.from_numpy(audio).to(self.device)
+            samples = pad_or_trim(audio_tensor, N_SAMPLES)
+            mel = log_mel_spectrogram(samples).unsqueeze(0)
+            return mel
         except Exception as exc:
             logger.exception("Audio preprocessing failed")
             raise RuntimeError(f"Audio preprocessing failed: {exc}") from exc
 
     def _run_batch_inference(self, requests: list[_InferenceRequest]) -> list[list[dict]]:
-        """Runs ONE forward pass for the whole batch (called by the
-        DynamicBatcher - this is the only place that touches self.model, so
-        no separate lock is needed around it). Every mel is already the same
-        fixed shape (pad_or_trim to N_SAMPLES), so concatenation is always
-        valid regardless of each request's original audio length."""
         autocast_context = (
             torch.autocast(device_type="cuda", dtype=torch.float16)
             if self.device == "cuda" else nullcontext()
@@ -378,26 +357,14 @@ class IntentService:
                 mels = torch.cat([r.mel for r in requests], dim=0)
                 logits = self.model(mels)
 
-                if logits.ndim != 2:
-                    raise RuntimeError(
-                        f"Unexpected model output shape: {tuple(logits.shape)}. "
-                        "Expected [batch, num_classes]."
-                    )
-                if logits.shape[0] != batch_size:
-                    raise RuntimeError(
-                        f"Unexpected batch dimension in model output: "
-                        f"{logits.shape[0]} (expected {batch_size})"
-                    )
+                if logits.ndim != 2 or logits.shape[0] != batch_size:
+                    raise RuntimeError(f"Unexpected output shape: {tuple(logits.shape)}")
 
                 output_classes = int(logits.shape[1])
                 self.model_output_classes = output_classes
 
                 if output_classes != self.num_classes:
-                    raise RuntimeError(
-                        f"MODEL CLASS COUNT MISMATCH: config.json contains {self.num_classes} "
-                        f"intents, but the model outputs {output_classes} classes. "
-                        "Make sure config.json and model.bin belong to the same model."
-                    )
+                    raise RuntimeError("Model output shape mismatch with configured intents")
 
                 probabilities = torch.softmax(logits, dim=1)
 
@@ -416,13 +383,9 @@ class IntentService:
         for score, index in zip(scores.detach().cpu().tolist(), indices.detach().cpu().tolist()):
             index = int(index)
             if index not in self.idx_to_intent:
-                raise RuntimeError(
-                    f"Model returned class index {index}, but that index does not exist in idx_to_intent."
-                )
+                raise RuntimeError(f"Index {index} missing from mapping")
             ranked_intents.append({"intent": self.idx_to_intent[index], "confidence": float(score)})
         return ranked_intents
 
 
-# Module-level singleton: one model in memory for the process, shared by the
-# lifespan startup hook (main.py) and the route handlers (api/v1/routes.py).
 service = IntentService()

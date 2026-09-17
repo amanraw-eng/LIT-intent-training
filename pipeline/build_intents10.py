@@ -287,9 +287,24 @@ def _paths(output_dir):
 def _try_push(output_dir, audio_dir, push_state_path):
     from . import push_intents10
 
+    # train_local_offset: rows surgically moved OUT of the "train" split
+    # (e.g. shard extraction to build validation/test - see
+    # pipeline/push_intents10.py's append_incremental docstring). Without it,
+    # the Hub's train row count under-counts how far into data.jsonl is
+    # already accounted for, and the next incremental push would re-add
+    # already-distributed rows as if they were new. Persisted here so it
+    # survives across runs; carried forward on every save.
+    push_state = _load_json(push_state_path, {})
+    local_offset = push_state.get("train_local_offset", 0)
+
     try:
-        result = push_intents10.append_incremental(output_dir=output_dir, audio_dir=audio_dir)
-        _save_json(push_state_path, {"total_rows_pushed": result["total_rows"], "time": _now()})
+        result = push_intents10.append_incremental(
+            output_dir=output_dir, audio_dir=audio_dir, local_offset=local_offset
+        )
+        _save_json(
+            push_state_path,
+            {"total_rows_pushed": result["total_rows"], "train_local_offset": local_offset, "time": _now()},
+        )
         print(f"[build_intents10] pushed -> {result}")
         return result["total_rows"]
     except Exception as e:

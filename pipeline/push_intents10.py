@@ -34,6 +34,7 @@ import random
 import re
 import tempfile
 import time
+from datetime import datetime, timezone
 
 import yaml
 from datasets import Audio, Dataset, Features, Value, concatenate_datasets, load_dataset
@@ -42,6 +43,10 @@ from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 
 from dataset_paths import resolve_chunk_path
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
 from . import config
 from .push_to_hub import _dedupe_keep_first
 
@@ -165,6 +170,7 @@ def split_and_push(output_dir=None, repo_id=None, private=True, val_size=4000, t
         ds.push_to_hub(repo_id, private=private, split=split_name, token=token)
         counts[split_name] = len(ds)
 
+    _refresh_readme_body(repo_id, token)
     print(f"[push_intents10] done -> https://huggingface.co/datasets/{repo_id}")
     return counts
 
@@ -286,6 +292,89 @@ def _bump_readme_counts(repo_id, split, meta, rest, delta_examples, delta_num_by
     return new_total
 
 
+def _all_split_counts(repo_id, token, splits=("train", "validation", "test")):
+    counts = {}
+    for s in splits:
+        try:
+            n, _, _ = _read_hub_split_metadata(repo_id, s, token)
+            counts[s] = n
+        except (EntryNotFoundError, RepositoryNotFoundError, DatasetNotFoundError, KeyError):
+            pass
+    return counts
+
+
+def _build_readme_body(repo_id, token):
+    """Descriptive markdown body appended after the YAML frontmatter -
+    current per-split row counts and the live intent taxonomy, so the README
+    stays accurate without anyone having to remember to update it by hand."""
+    from .intents10 import INTENT_NAMES
+
+    counts = _all_split_counts(repo_id, token)
+    total = sum(counts.values())
+    lines = [
+        f"# {repo_id.split('/')[-1]}",
+        "",
+        "Per-utterance intent classification dataset built from `kapturecx/bolAIndia` "
+        "(human-channel ASR chunks of Hindi/Hinglish customer calls), labeled with "
+        f"Gemini ({config.GEMINI_MODEL}) against a closed taxonomy "
+        f"(`{os.path.basename(config.INTENTS10_TAXONOMY_PATH)}`, {len(INTENT_NAMES)} intents).",
+        "",
+        f"**Last updated:** {_now()}",
+        "",
+        "## Splits",
+        "",
+        "| split | rows |",
+        "|---|---|",
+    ]
+    for s in ("train", "validation", "test"):
+        if s in counts:
+            lines.append(f"| {s} | {counts[s]:,} |")
+    lines += [
+        f"| **total** | **{total:,}** |",
+        "",
+        "## Fields",
+        "",
+        "| Field | Description |",
+        "|---|---|",
+        "| `id` | stable unique row id (source `chunk_id`) |",
+        "| `audio` | audio clip for this turn (native sample rate, no forced resampling) |",
+        "| `transcript` | ASR transcript |",
+        "| `start_ms` / `end_ms` | chunk position within the source recording (ms) |",
+        "| `duration_s` | chunk duration in seconds |",
+        "| `intent` | one of the closed-set intents below |",
+        "| `confidence` / `language_code` / `channel` | ASR provider metadata |",
+        "| `conversation_id` / `mongo_id` / `source_db` | source call provenance |",
+        "",
+        "## Intents",
+        "",
+        ", ".join(f"`{n}`" for n in INTENT_NAMES),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _refresh_readme_body(repo_id, token):
+    """Re-fetch the CURRENT frontmatter (never trust a possibly-stale local
+    copy) and replace only the body below it with fresh stats - called after
+    every push so the README never drifts from what's actually on the Hub."""
+    readme_path = hf_hub_download(repo_id, "README.md", repo_type="dataset", token=token)
+    content = open(readme_path, encoding="utf-8").read()
+    m = re.match(r"^(---\n.*?\n---\n)", content, re.DOTALL)
+    frontmatter = m.group(1) if m else "---\n---\n"
+
+    new_content = frontmatter + "\n" + _build_readme_body(repo_id, token)
+    tmp_readme = tempfile.mktemp(suffix=".md")
+    try:
+        with open(tmp_readme, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        HfApi(token=token).upload_file(
+            path_or_fileobj=tmp_readme, path_in_repo="README.md", repo_id=repo_id, repo_type="dataset"
+        )
+    finally:
+        if os.path.exists(tmp_readme):
+            os.remove(tmp_readme)
+
+
 def _resolve_paths(output_dir, audio_dir):
     output_dir = output_dir or config.INTENTS10_OUTPUT_DIR
     audio_dir = audio_dir or os.path.join(output_dir, config.INTENTS10_AUDIO_DIRNAME)
@@ -304,6 +393,7 @@ def push(output_dir=None, repo_id=None, private=True, split="train", limit=None,
     ds = build_dataset(data_path, limit=limit, audio_dir=audio_dir)
     print(f"[push_intents10] {len(ds)} rows -> pushing to {repo_id} (private={private}, split={split})...")
     ds.push_to_hub(repo_id, private=private, split=split, token=token)
+    _refresh_readme_body(repo_id, token)
     print(f"[push_intents10] done -> https://huggingface.co/datasets/{repo_id}")
     return {"repo_id": repo_id, "total_rows": len(ds)}
 
@@ -333,15 +423,27 @@ def append(output_dir=None, repo_id=None, private=True, split="train", limit=Non
 
     print(f"[push_intents10] pushing {len(combined)} total rows to {repo_id} (split={split})...")
     combined.push_to_hub(repo_id, private=private, split=split, token=token)
+    _refresh_readme_body(repo_id, token)
     print(f"[push_intents10] done -> https://huggingface.co/datasets/{repo_id}")
     return {"repo_id": repo_id, "total_rows": len(combined)}
 
 
-def append_incremental(output_dir=None, repo_id=None, private=True, split="train", token=None, audio_dir=None):
+def append_incremental(
+    output_dir=None, repo_id=None, private=True, split="train", token=None, audio_dir=None, local_offset=0
+):
     """Upload only the LOCAL rows added since the last push, as a new parquet
     shard - existing shards are never downloaded or rewritten. Cost scales
     with the delta, not the whole dataset. Falls back to a normal fresh push
-    only when the repo/README genuinely doesn't exist yet."""
+    only when the repo/README genuinely doesn't exist yet.
+
+    local_offset: the Hub's row count for `split` is used as a cursor into
+    data.jsonl - this only works while that count equals a clean PREFIX of
+    the local file. If rows were ever surgically removed from the middle of
+    this split (e.g. pipeline/push_intents10.py's shard-extraction to build
+    validation/test - see data.jsonl.split_offset.json), that assumption
+    breaks: the Hub count under-reports how far into data.jsonl is already
+    accounted for. local_offset corrects for that - pass the total rows
+    removed that way so far, and this adds it back before slicing."""
     data_path, audio_dir = _resolve_paths(output_dir, audio_dir)
     repo_id = repo_id or config.INTENTS10_HF_REPO
     token = token or config.HF_TOKEN
@@ -352,15 +454,20 @@ def append_incremental(output_dir=None, repo_id=None, private=True, split="train
         print(f"[push_intents10] no existing '{split}' metadata found ({type(e).__name__}: {e}) - pushing fresh")
         return push(output_dir=output_dir, repo_id=repo_id, private=private, split=split, audio_dir=audio_dir, token=token)
 
+    if local_offset:
+        print(f"[push_intents10] applying local_offset={local_offset} (rows previously moved out of '{split}')")
+    start_index += local_offset
+
     delta_ds = build_delta_dataset(data_path, start_index, audio_dir)
     if delta_ds is None or len(delta_ds) == 0:
-        print(f"[push_intents10] nothing new to push ({start_index} rows already on the Hub)")
-        return {"repo_id": repo_id, "total_rows": start_index}
+        print(f"[push_intents10] nothing new to push ({start_index} rows already accounted for)")
+        return {"repo_id": repo_id, "total_rows": start_index - local_offset}
 
-    print(f"[push_intents10] {start_index} rows already on Hub - uploading {len(delta_ds)} new rows as a delta shard...")
+    print(f"[push_intents10] {start_index} local rows already accounted for - uploading {len(delta_ds)} new rows as a delta shard...")
     shard_name, shard_bytes, shard_num_bytes = _upload_delta_shard(repo_id, split, delta_ds, token)
     print(f"[push_intents10] uploaded {shard_name} ({shard_bytes} bytes)")
     new_total = _bump_readme_counts(repo_id, split, meta, rest, len(delta_ds), shard_num_bytes, shard_bytes, token)
+    _refresh_readme_body(repo_id, token)
     print(f"[push_intents10] done -> https://huggingface.co/datasets/{repo_id} (total rows: {new_total})")
     return {"repo_id": repo_id, "total_rows": new_total}
 

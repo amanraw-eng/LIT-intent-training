@@ -7,7 +7,7 @@
           "The user is simply saying yes, okay, agreed, or an equivalent positive acknowledgement.",
           "The utterance must not contain a separate meaningful action, question, or request.",
           "If the user invites the bot to continue, use CONTINUE_CONVERSATION instead.",
-          "If the user commits to performing an action, use ACTION_COMMITMENT instead."
+          "If the user commits to performing an action, use ACTION_COMMITMENT_NOW or ACTION_COMMITMENT_NOW_LATER instead."
         ],
         "examples": [
           "हाँ",
@@ -334,6 +334,7 @@
           "पता नहीं",
           "हां शायद",
           "ठीक...",
+          "आज जमा कर दिया है",
           "वो...",
           "I don't know",
           "maybe",

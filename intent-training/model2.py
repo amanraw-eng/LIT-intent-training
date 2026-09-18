@@ -12,7 +12,7 @@ ENCODER_FRAMES_PER_SECOND = 50  # whisper encoder output: 20ms/timestep
 
 
 class WhisperIntentClassification(nn.Module):
-    def __init__(self, model_type="small", n_class=20, dropout=0.3):
+    def __init__(self, model_type="small", n_class=20, dropout=0.3 ):
         super().__init__()
         self.encoder = whisper.load_model(model_type).encoder
 
@@ -22,8 +22,12 @@ class WhisperIntentClassification(nn.Module):
         feature_dim = 768
 
         self.intent_classifier = nn.Sequential(
+            nn.Linear(feature_dim, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Linear(60, n_class),
             nn.Dropout(dropout),
-            nn.Linear(feature_dim, n_class),
+            nn.Linear(256,n_class)
         )
 
     def forward(self, x, valid_lengths=None):

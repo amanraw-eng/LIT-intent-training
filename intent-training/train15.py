@@ -1,11 +1,5 @@
 from model2 import WhisperIntentClassification
-# evaluate.py's load_model/run_inference (used below for the final test-set
-# pass) build a plain model.WhisperIntentClassification and call it with no
-# valid_lengths, expecting (mels, labels) batches - so the test split keeps
-# using dataset.py's unmasked HFIntentDataset/collate_mel_fn, while train/val
-# (trained via LightningModel above) use dataset2's duration-capped,
-# length-masked version.
-from dataset import HFIntentDataset as PlainHFIntentDataset, cap_dataset_per_class, collate_mel_fn as plain_collate_mel_fn, load_hf_split
+from dataset import cap_dataset_per_class, load_hf_split
 from dataset2 import DURATION_CAP_S, HFIntentDataset, collate_mel_fn
 
 import torch
@@ -28,14 +22,13 @@ from sklearn.metrics import classification_report
 from experiment_config import get_experiment_paths, section
 from evaluate import (
     load_model as load_eval_model,
-    run_inference,
     save_class_distribution,
     plot_confusion_matrix,
     plot_per_class_accuracy,
     log_evaluation_to_mlflow,
 )
 
-# RUN SETTINGS (edit shared_settings.py [training] for the shared defaults below)
+# Shared defaults setup
 _TRAINING = section("training")
 SEED = _TRAINING["seed"]
 pl.seed_everything(SEED)
@@ -44,49 +37,30 @@ torch.manual_seed(SEED)
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = _TRAINING["gpu_device"]
 
-# ============================================================
-# SCRIPT-SPECIFIC RUN OVERRIDES (edit here for this training run)
-# ============================================================
-# This 15-intent dataset lives in its own repo, separate from
-# shared_settings.py's [training].dataset_repo (which other experiment
-# versions - v4, v6-eval2, etc. - still point at) - overridden locally here
-# rather than changed globally so this run doesn't affect those.
+# Experiment configuration
 REPO_ID = "kapturecx/S2I-10-v1"
 # This dataset's splits are named train/val/test, not train/validation/eval
 # like shared_settings.py's default dataset_repo.
 TRAIN_SPLIT = "train"
 VAL_SPLIT = "validation"
-TEST_SPLIT = "test"  # not used for training - held out for a final evaluate.py pass
+TEST_SPLIT = "test"
 
 DEFAULT_EXPERIMENT_VERSION = "S2I-15"
 
 CAP_PER_CLASS = 30_000
-BATCH_SIZE = 8
+BATCH_SIZE = 16
 NUM_WORKERS = 4
 MAX_EPOCHS = 10
 PATIENCE = 5
 SAVE_TOP_K = 4
 
-# train accuracy was climbing while val loss rose from the very first eval -
-# the whole encoder was being fine-tuned at the same LR as a randomly
-# initialized head from step 0, so the head's large early gradients corrupt
-# pretrained acoustic weights before it has learned anything. Freeze the
-# encoder while the head warms up, then unfreeze it at a much lower LR than
-# the head (see LightningModel.on_train_epoch_start/configure_optimizers).
 FREEZE_ENCODER_EPOCHS = 3
 ENCODER_LR = 1e-6
 HEAD_LR = 5e-4
 
 
 class MlflowStopCallback(pl.Callback):
-    """Lets you stop this run remotely from MLflow: if the run's status ever
-    reads as anything other than RUNNING (e.g. you mark it stopped/killed
-    from the MLflow UI or call
-    MlflowClient().set_terminated(run_id, status="KILLED") yourself),
-    training stops gracefully at the next validation epoch - already-saved
-    checkpoints are unaffected. Checked once per validation epoch; a failed
-    check (e.g. a transient network blip) is logged and ignored rather than
-    treated as a stop signal or allowed to crash training."""
+    """Allows remote job cancellation from the MLflow UI."""
 
     def __init__(self, tracking_uri, run_id):
         self.client = MlflowClient(tracking_uri=tracking_uri)
@@ -118,33 +92,38 @@ class LightningModel(pl.LightningModule):
         self.encoder_lr = encoder_lr
         self.head_lr = head_lr
         self.freeze_encoder_epochs = freeze_encoder_epochs
+
         self.register_buffer(
             "class_weights",
             class_weights if class_weights is not None else torch.ones(n_class),
         )
+        self.loss_fn = nn.CrossEntropyLoss(weight=self.class_weights)
 
     def forward(self, x, valid_lengths=None):
         return self.model(x, valid_lengths=valid_lengths)
 
     def on_train_epoch_start(self):
-        freeze = self.current_epoch < self.freeze_encoder_epochs
-        for p in self.model.encoder.parameters():
-            p.requires_grad = not freeze
+        # Unfreeze encoder via learning rate modulation in param_groups
+        current_encoder_lr = 0.0 if self.current_epoch < self.freeze_encoder_epochs else self.encoder_lr
+        opt = self.optimizers()
+
+        if isinstance(opt, torch.optim.Optimizer):
+            opt.param_groups[0]["lr"] = current_encoder_lr
+
         if self.current_epoch == self.freeze_encoder_epochs:
-            print(f"epoch {self.current_epoch}: unfreezing encoder (lr={self.encoder_lr})")
+            print(f"--- Epoch {self.current_epoch}: Unfreezing encoder (lr={self.encoder_lr}) ---")
 
     def configure_optimizers(self):
+        init_encoder_lr = 0.0 if self.current_epoch < self.freeze_encoder_epochs else self.encoder_lr
+
         optimizer = torch.optim.AdamW(
             [
-                {"params": self.model.encoder.parameters(), "lr": self.encoder_lr},
-                {"params": self.model.intent_classifier.parameters(), "lr": self.head_lr},
+                {"params": self.model.encoder.parameters(), "lr": init_encoder_lr},        # Group 0
+                {"params": self.model.intent_classifier.parameters(), "lr": self.head_lr}, # Group 1
             ],
             weight_decay=_TRAINING["weight_decay"],
         )
-        return [optimizer]
-
-    def loss_fn(self, prediction, targets):
-        return nn.CrossEntropyLoss(weight=self.class_weights)(prediction, targets)
+        return optimizer
 
     def training_step(self, batch, batch_idx):
         x, y, valid_lengths = batch
@@ -154,16 +133,12 @@ class LightningModel(pl.LightningModule):
         loss = self.loss_fn(logits, y)
 
         winners = logits.argmax(dim=1)
-        corrects = (winners == y)
-        acc = corrects.sum().float()/float(logits.size(0))
+        acc = (winners == y).float().mean()
 
         self.log('train/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('train/acc', acc, on_step=False, on_epoch=True, prog_bar=True)
 
-        return {
-            'loss':loss,
-            'acc':acc
-            }
+        return {'loss': loss, 'acc': acc}
 
     def validation_step(self, batch, batch_idx):
         x, y, valid_lengths = batch
@@ -173,15 +148,36 @@ class LightningModel(pl.LightningModule):
         loss = self.loss_fn(logits, y)
 
         winners = logits.argmax(dim=1)
-        corrects = (winners == y)
-        acc = corrects.sum().float() / float( logits.size(0))
+        acc = (winners == y).float().mean()
 
-        self.log('val/loss' , loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val/acc',acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val/loss', loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('val/acc', acc, on_step=False, on_epoch=True, prog_bar=True)
 
-        return {'val_loss':loss,
-                'val_acc':acc,
-                }
+        return {'val_loss': loss, 'val_acc': acc}
+
+
+@torch.no_grad()
+def run_masked_inference(model, dataloader, device):
+    """Executes evaluation while preserving length masking."""
+    model.eval()
+    all_preds = []
+    all_labels = []
+
+    for batch in dataloader:
+        if len(batch) == 3:
+            x, y, valid_lengths = batch
+            x, y, valid_lengths = x.to(device), y.to(device), valid_lengths.to(device)
+            logits = model(x, valid_lengths=valid_lengths)
+        else:
+            x, y = batch
+            x, y = x.to(device), y.to(device)
+            logits = model(x)
+
+        preds = logits.argmax(dim=1)
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(y.cpu().numpy())
+
+    return all_labels, all_preds
 
 
 if __name__ == "__main__":
@@ -189,56 +185,35 @@ if __name__ == "__main__":
     parser.add_argument(
         "--experiment-version",
         default=DEFAULT_EXPERIMENT_VERSION,
-        help=f"Experiment version (defaults to {DEFAULT_EXPERIMENT_VERSION!r} for this script, "
-             "not shared_settings.py's global default - pass this to run a second variant, "
-             "e.g. --experiment-version S2I-15-run2)",
+        help=f"Experiment version (defaults to {DEFAULT_EXPERIMENT_VERSION!r})",
     )
     args = parser.parse_args()
     experiment_paths = get_experiment_paths(args.experiment_version)
     print(f"Experiment version: {experiment_paths.version}")
     print(f"Dataset repo: {REPO_ID} (splits: {TRAIN_SPLIT}/{VAL_SPLIT}/{TEST_SPLIT})")
-    print(f"Checkpoint directory: {experiment_paths.checkpoint_dir}")
-    print(f"Intent map: {experiment_paths.intent_map_path}")
-    print(f"Eval output directory: {experiment_paths.eval_output_dir}")
 
-    # isolated per-version dirs (models/<version>/, eval_results/<version>/) -
-    # created up front so nothing later has to assume they already exist
     os.makedirs(experiment_paths.checkpoint_dir, exist_ok=True)
     os.makedirs(os.path.dirname(experiment_paths.intent_map_path), exist_ok=True)
     os.makedirs(experiment_paths.eval_output_dir, exist_ok=True)
 
     tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
-    print(tracking_uri)
-    user_name = os.environ.get('MLFLOW_USER_NAME')
     if not tracking_uri:
-        raise RuntimeError("MLFLOW_TRACKING_URI not set in .env")
+        raise RuntimeError("MLFLOW_TRACKING_URI not set in environment.")
     mlflow.set_tracking_uri(tracking_uri)
 
     if token := os.environ.get("MLFLOW_TRACKING_TOKEN"):
         os.environ["MLFLOW_TRACKING_PASSWORD"] = token
 
     experiment = mlflow.set_experiment(experiment_paths.mlflow_experiment_name)
-    print(f"Experiment '{experiment_paths.mlflow_experiment_name}' -> id={experiment.experiment_id}")
 
-    # S2I-15: new 15-intent taxonomy from its own HF Hub repo (REPO_ID above),
-    # with train/val/test splits already prepared upstream. The train split
-    # is capped at CAP_PER_CLASS rows per class so no single class can
-    # dominate the gradient signal; validation is left uncapped so it still
-    # reflects real skew.
     train_hf_full = load_hf_split(REPO_ID, TRAIN_SPLIT)
     val_hf = load_hf_split(REPO_ID, VAL_SPLIT)
 
     train_hf = cap_dataset_per_class(train_hf_full, CAP_PER_CLASS, seed=SEED)
-    print(f"train: {len(train_hf_full)} rows -> capped to {len(train_hf)} rows "
-          f"(max {CAP_PER_CLASS}/class), validation: {len(val_hf)} rows")
 
-    # label mapping is derived from the FULL train set (not the capped subset),
-    # and frozen for this run so checkpoints stay valid regardless of how the
-    # Hub dataset evolves later (push_to_hub.py / infer.py read this file)
     intents = sorted(set(train_hf_full["intent"]))
     intent_to_idx = {intent: idx for idx, intent in enumerate(intents)}
     n_class = len(intent_to_idx)
-    print(f"n_class: {n_class}")
 
     with open(experiment_paths.intent_map_path, "w", encoding="utf-8") as f:
         json.dump(intent_to_idx, f, indent=2, ensure_ascii=False)
@@ -246,33 +221,27 @@ if __name__ == "__main__":
     train_dataset = HFIntentDataset(train_hf, intent_to_idx=intent_to_idx, duration_cap_s=DURATION_CAP_S)
     val_dataset = HFIntentDataset(val_hf, intent_to_idx=intent_to_idx, duration_cap_s=DURATION_CAP_S)
 
-    # class-weighted loss on top of the cap, computed from the POST-cap
-    # distribution - capping already removes the most extreme imbalance,
-    # weighting corrects whatever skew remains among the rest.
     train_labels = [intent_to_idx[intent] for intent in train_hf["intent"]]
     class_counts = Counter(train_labels)
     class_weights = torch.tensor(
         [len(train_labels) / (n_class * class_counts[i]) for i in range(n_class)],
         dtype=torch.float32,
     )
-    print("post-cap class counts:", {intents[i]: class_counts[i] for i in range(n_class)})
-    print("class weights:", {intents[i]: round(w, 3) for i, w in enumerate(class_weights.tolist())})
 
-    # dataloaders
     trainloader = torch.utils.data.DataLoader(
-            train_dataset,
-            batch_size=BATCH_SIZE,
-            shuffle=True,
-            num_workers=NUM_WORKERS,
-            collate_fn = collate_mel_fn,
-        )
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=NUM_WORKERS,
+        collate_fn=collate_mel_fn,
+    )
 
     valloader = torch.utils.data.DataLoader(
-            val_dataset,
-            batch_size=BATCH_SIZE,
-            num_workers=NUM_WORKERS,
-            collate_fn = collate_mel_fn,
-        )
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        collate_fn=collate_mel_fn,
+    )
 
     model = LightningModel(n_class=n_class, class_weights=class_weights)
 
@@ -281,76 +250,60 @@ if __name__ == "__main__":
         run_name=experiment_paths.run_name,
         tracking_uri=tracking_uri,
     )
-    # accessing .run_id forces MLFlowLogger to create the run now (not lazily
-    # on first log call), so the stop-callback has a real run_id to poll
-    # from the very first validation epoch
     mlflow_run_id = logger.run_id
-    print(f"MLflow run_id: {mlflow_run_id} (set this run's status away from "
-          "RUNNING in MLflow at any time to stop training gracefully)")
 
     model_checkpoint_callback = ModelCheckpoint(
-            dirpath=experiment_paths.checkpoint_dir,
-            monitor='val/acc',
-            mode='max',
-            save_top_k=SAVE_TOP_K,
-            verbose=1,
-            filename=experiment_paths.checkpoint_prefix + "-epoch{epoch:02d}")
+        dirpath=experiment_paths.checkpoint_dir,
+        monitor='val/acc',
+        mode='max',
+        save_top_k=SAVE_TOP_K,
+        verbose=1,
+        filename=experiment_paths.checkpoint_prefix + "-epoch{epoch:02d}",
+    )
 
     early_stopping_callback = EarlyStopping(
-            monitor='val/acc',
-            mode='max',
-            patience=PATIENCE,
-            verbose=True)
+        monitor='val/acc',
+        mode='max',
+        patience=PATIENCE,
+        verbose=True,
+    )
 
     mlflow_stop_callback = MlflowStopCallback(tracking_uri, mlflow_run_id)
 
     trainer = Trainer(
-            fast_dev_run=False, # true for dev run
-            accelerator="gpu",
-            devices=1,
-            max_epochs=MAX_EPOCHS,
-            enable_checkpointing=True,
-            callbacks=[
-                model_checkpoint_callback,
-                early_stopping_callback,
-                mlflow_stop_callback,
-            ],
-            logger=logger,
-            )
+        fast_dev_run=False,
+        accelerator="gpu",
+        devices=1,
+        max_epochs=MAX_EPOCHS,
+        enable_checkpointing=True,
+        callbacks=[
+            model_checkpoint_callback,
+            early_stopping_callback,
+            mlflow_stop_callback,
+        ],
+        logger=logger,
+    )
 
     trainer.fit(model, train_dataloaders=trainloader, val_dataloaders=valloader)
 
-    # ------------------------------------------------------------------
-    # final evaluation: best checkpoint (by val/acc, tracked live by
-    # model_checkpoint_callback - not re-derived from disk) on the held-out
-    # TEST_SPLIT, reusing evaluate.py's reporting/plotting so results land in
-    # the same eval_output_dir layout and get logged to MLflow the same way
-    # a standalone evaluate.py run would.
-    # ------------------------------------------------------------------
+    # Final Evaluation Loop
     best_ckpt_path = model_checkpoint_callback.best_model_path
     best_score = model_checkpoint_callback.best_model_score
-    print(f"Best checkpoint: {best_ckpt_path} (val/acc={best_score})")
 
     if not best_ckpt_path:
-        print("No best checkpoint recorded (training may have stopped before "
-              "any validation epoch) - skipping test-set evaluation")
+        print("No best checkpoint recorded - skipping test evaluation.")
     else:
         test_hf = load_hf_split(REPO_ID, TEST_SPLIT)
-        print(f"test: {len(test_hf)} rows")
-
-        unseen_intents = set(test_hf["intent"]) - set(intent_to_idx)
-        if unseen_intents:
-            raise ValueError(f"Intents in test data missing from intent_map: {unseen_intents}")
-
         idx_to_intent = {v: k for k, v in intent_to_idx.items()}
-        test_dataset = PlainHFIntentDataset(test_hf, intent_to_idx=intent_to_idx)
+
+        test_dataset = HFIntentDataset(test_hf, intent_to_idx=intent_to_idx, duration_cap_s=DURATION_CAP_S)
         test_loader = torch.utils.data.DataLoader(
-                test_dataset,
-                batch_size=BATCH_SIZE,
-                shuffle=False,
-                num_workers=NUM_WORKERS,
-                collate_fn=plain_collate_mel_fn,
-            )
+            test_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            num_workers=NUM_WORKERS,
+            collate_fn=collate_mel_fn,
+        )
 
         eval_output_dir = experiment_paths.eval_output_dir
         test_labels_by_idx = [intent_to_idx[intent] for intent in test_hf["intent"]]
@@ -361,7 +314,7 @@ if __name__ == "__main__":
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
         eval_model = load_eval_model(best_ckpt_path, _TRAINING["whisper_size"], n_class, device)
-        labels, preds = run_inference(eval_model, test_loader, device)
+        labels, preds = run_masked_inference(eval_model, test_loader, device)
 
         present_ids = sorted(set(labels) | set(preds))
         target_names = [idx_to_intent[i] for i in present_ids]
@@ -392,4 +345,3 @@ if __name__ == "__main__":
             report_dict=report_dict,
             eval_rows=len(labels),
         )
-        print(f"Saved + logged best-checkpoint test-set evaluation -> {eval_output_dir}")

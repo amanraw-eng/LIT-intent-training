@@ -2,36 +2,35 @@ import whisper
 import torch
 import torch.nn as nn
 
-# Same layer shapes as model.py's WhisperIntentClassification, so a checkpoint
-# trained with either module loads into the other via strict state_dict
-# loading (api.py, push_to_hub.py). The only change is forward() optionally
-# doing length-masked mean pooling instead of averaging over all 1500 encoder
-# timesteps - most clips run a few seconds inside a 30s-padded window, so an
-# unmasked mean is dominated by the encoder's response to padding silence.
-ENCODER_FRAMES_PER_SECOND = 50  # whisper encoder output: 20ms/timestep
-
 
 class WhisperIntentClassification(nn.Module):
-    def __init__(self, model_type="small", n_class=20, dropout=0.3 ):
+    def __init__(self, model_type="small", n_class=15, dropout=0.3):
         super().__init__()
         self.encoder = whisper.load_model(model_type).encoder
 
+        # Keep requires_grad=True across all parameters so PyTorch Lightning and
+        # AdamW maintain valid optimizer states throughout warmup and unfreezing
         for param in self.encoder.parameters():
             param.requires_grad = True
 
-        feature_dim = 768
+        feature_dim = self.encoder.ln_post.normalized_shape[0]
 
+        # Classification neck: linear projection with proper normalization,
+        # dropout placement after activation, and dimension alignment
         self.intent_classifier = nn.Sequential(
+            nn.Dropout(dropout),
             nn.Linear(feature_dim, 256),
             nn.LayerNorm(256),
             nn.ReLU(),
-            nn.Linear(256, 128),
             nn.Dropout(dropout),
-            nn.Linear(128, n_class)
+            nn.Linear(256, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(),
+            nn.Linear(128, n_class),
         )
 
     def forward(self, x, valid_lengths=None):
-        x = self.encoder(x)  # [B, T=1500, D]
+        x = self.encoder(x)  # Shape: [B, T, D]
 
         if valid_lengths is not None:
             t = x.shape[1]

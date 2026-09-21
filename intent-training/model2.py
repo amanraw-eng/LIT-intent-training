@@ -25,9 +25,9 @@ class WhisperIntentClassification(nn.Module):
             nn.Linear(feature_dim, 256),
             nn.LayerNorm(256),
             nn.ReLU(),
-            nn.Linear(60, n_class),
+            nn.Linear(256, 128),
             nn.Dropout(dropout),
-            nn.Linear(256,n_class)
+            nn.Linear(128, n_class)
         )
 
     def forward(self, x, valid_lengths=None):

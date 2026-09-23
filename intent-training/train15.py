@@ -56,17 +56,17 @@ VAL_SPLIT = INTENT_SET.val_split
 TEST_SPLIT = INTENT_SET.test_split
 CAP_PER_CLASS = INTENT_SET.cap_per_class
 
-DEFAULT_EXPERIMENT_VERSION = "S2I-15-V6"
+DEFAULT_EXPERIMENT_VERSION = "S2I-15-V8"
 
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 NUM_WORKERS = 8
 MAX_EPOCHS = 15
 PATIENCE = 5
 SAVE_TOP_K = 4
 
-FREEZE_ENCODER_EPOCHS = 5
+FREEZE_ENCODER_EPOCHS = 8
 ENCODER_LR = 1e-6
-HEAD_LR = 5e-4
+HEAD_LR = 6e-4
 
 
 class MlflowStopCallback(pl.Callback):
@@ -243,6 +243,12 @@ if __name__ == "__main__":
             "Default (unset) leaves the computed weight as-is."
         ),
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=BATCH_SIZE,
+        help=f"Train/val/test batch size (default {BATCH_SIZE})",
+    )
     args = parser.parse_args()
     experiment_paths = get_experiment_paths(args.experiment_version)
     print(f"Experiment version: {experiment_paths.version}")
@@ -299,7 +305,7 @@ if __name__ == "__main__":
 
     trainloader = torch.utils.data.DataLoader(
         train_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=args.batch_size,
         shuffle=True,
         num_workers=NUM_WORKERS,
         collate_fn=collate_mel_fn,
@@ -309,7 +315,7 @@ if __name__ == "__main__":
 
     valloader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=args.batch_size,
         num_workers=NUM_WORKERS,
         collate_fn=collate_mel_fn,
         pin_memory=True,
@@ -415,7 +421,7 @@ if __name__ == "__main__":
         test_dataset = HFIntentDataset(test_hf, intent_to_idx=intent_to_idx, duration_cap_s=DURATION_CAP_S)
         test_loader = torch.utils.data.DataLoader(
             test_dataset,
-            batch_size=BATCH_SIZE,
+            batch_size=args.batch_size,
             shuffle=False,
             num_workers=NUM_WORKERS,
             collate_fn=collate_mel_fn,

@@ -26,13 +26,20 @@ from dataset import (
     collate_mel_fn,
     load_hf_split,
 )
+from dataset2 import (
+    DURATION_CAP_S,
+    HFIntentDataset as MaskedHFIntentDataset,
+    collate_mel_fn as masked_collate_mel_fn,
+)
 
 from model import WhisperIntentClassification
 
 from experiment_config import (
     EXPERIMENT_VERSION_ENV,
     get_experiment_paths,
+    load_manifest,
 )
+from intent_sets import get_intent_set
 
 
 # ============================================================
@@ -90,8 +97,15 @@ def load_model(
     model_type,
     n_class,
     device,
+    model_cls=None,
 ):
-    model = WhisperIntentClassification(
+    # model_cls defaults to model.py's architecture (the 17-intent one this
+    # script was originally written for). Pass the architecture actually
+    # used to train ckpt_path - e.g. model2's for a 15-intent checkpoint -
+    # or load_state_dict fails on shape mismatches instead of silently
+    # loading garbage weights.
+    model_cls = model_cls or WhisperIntentClassification
+    model = model_cls(
         model_type,
         n_class=n_class,
     )
@@ -133,8 +147,16 @@ def run_inference(
     loader,
     device,
     hf_split,
+    uses_valid_lengths=False,
 ):
     """
+    uses_valid_lengths must be True iff model expects the masked-pooling
+    valid_lengths kwarg (model2's WhisperIntentClassification) - otherwise a
+    3-element batch tuple's 3rd element is instead treated as audio_ids
+    (legacy behavior for model.py's checkpoints/dataset.py's collate_mel_fn).
+    Getting this wrong doesn't crash - it silently evaluates with the wrong
+    pooling and produces badly-wrong-looking-plausible metrics.
+
     Returns:
         labels
         raw_preds
@@ -189,6 +211,12 @@ def run_inference(
                 "audio_id"
             )
 
+            valid_lengths = batch.get(
+                "valid_lengths"
+            )
+            if valid_lengths is not None:
+                valid_lengths = valid_lengths.to(device)
+
         else:
 
             mels = batch[
@@ -199,11 +227,16 @@ def run_inference(
                 1
             ]
 
-            batch_audio_ids = (
-                batch[2]
-                if len(batch) > 2
-                else None
-            )
+            if uses_valid_lengths:
+                valid_lengths = batch[2].to(device)
+                batch_audio_ids = None
+            else:
+                valid_lengths = None
+                batch_audio_ids = (
+                    batch[2]
+                    if len(batch) > 2
+                    else None
+                )
 
         batch_size = len(
             labels
@@ -213,9 +246,15 @@ def run_inference(
         # Logits
         # ----------------------------------------------------
 
-        logits = model(
-            mels
-        )
+        if uses_valid_lengths:
+            logits = model(
+                mels,
+                valid_lengths=valid_lengths,
+            )
+        else:
+            logits = model(
+                mels
+            )
 
         probabilities = torch.softmax(
             logits,
@@ -1648,8 +1687,21 @@ def main():
     )
 
     parser.add_argument(
+        "--intent-set",
+        choices=["15", "17"],
+        default=None,
+        help=(
+            "Which intent taxonomy/model architecture (model.py vs model2.py) "
+            "to evaluate with. Defaults to whatever this experiment's manifest "
+            "records (written by its train script), falling back to '17' for "
+            "older experiments with no manifest."
+        ),
+    )
+
+    parser.add_argument(
         "--repo_id",
-        default=DEFAULT_REPO_ID,
+        default=None,
+        help=f"Defaults to the resolved intent-set's dataset repo (17-intent default: {DEFAULT_REPO_ID})",
     )
 
     parser.add_argument(
@@ -1657,8 +1709,10 @@ def main():
         choices=[
             "validation",
             "eval",
+            "test",
         ],
-        default="eval",
+        default=None,
+        help="Defaults to the resolved intent-set's test split name ('eval' for 17-intent, 'test' for 15-intent)",
     )
 
     parser.add_argument(
@@ -1725,6 +1779,29 @@ def main():
 
     experiment_paths = get_experiment_paths(
         args.experiment_version
+    )
+
+    manifest = load_manifest(experiment_paths)
+
+    intent_set_name = (
+        args.intent_set
+        or (manifest or {}).get("intent_set")
+        or "17"
+    )
+    intent_set = get_intent_set(intent_set_name)
+    model_cls = intent_set.load_model_class()
+
+    repo_id = args.repo_id or intent_set.dataset_repo
+    split = args.split or intent_set.test_split
+    # log_evaluation_to_mlflow and the various print()s below read these
+    # straight off `args` - keep them in sync with the resolved values.
+    args.repo_id = repo_id
+    args.split = split
+
+    print(
+        f"Intent set: {intent_set.name} "
+        f"(model_module={intent_set.model_module}, "
+        f"source={'--intent-set' if args.intent_set else ('manifest' if manifest else 'default')})"
     )
 
     intent_map_path = (
@@ -1802,11 +1879,11 @@ def main():
             f"{idx_to_intent[idx]}"
         )
 
-    if len(idx_to_intent) != 17:
+    if len(idx_to_intent) != intent_set.n_class:
 
         print(
-            f"[warning] expected 17 classes, "
-            f"found {len(idx_to_intent)}"
+            f"[warning] intent-set {intent_set.name!r} expects "
+            f"{intent_set.n_class} classes, found {len(idx_to_intent)}"
         )
 
     # ========================================================
@@ -1871,17 +1948,31 @@ def main():
             f"{unseen_intents}"
         )
 
-    eval_dataset = HFIntentDataset(
-        hf_split,
-        intent_to_idx=intent_to_idx,
-    )
+    # intent_set.masked_pooling picks which dataset/collate pairing matches
+    # how this checkpoint's model was trained - model2 checkpoints (15-intent)
+    # expect the valid_lengths-masked path from dataset2.py; mismatching this
+    # doesn't crash, it silently evaluates with the wrong pooling (see
+    # intent_sets.py's docstring on masked_pooling).
+    if intent_set.masked_pooling:
+        eval_dataset = MaskedHFIntentDataset(
+            hf_split,
+            intent_to_idx=intent_to_idx,
+            duration_cap_s=DURATION_CAP_S,
+        )
+        eval_collate_fn = masked_collate_mel_fn
+    else:
+        eval_dataset = HFIntentDataset(
+            hf_split,
+            intent_to_idx=intent_to_idx,
+        )
+        eval_collate_fn = collate_mel_fn
 
     eval_loader = DataLoader(
         eval_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        collate_fn=collate_mel_fn,
+        collate_fn=eval_collate_fn,
     )
 
     eval_labels_by_idx = [
@@ -1919,6 +2010,7 @@ def main():
         args.model_type,
         len(intent_to_idx),
         device,
+        model_cls=model_cls,
     )
 
     # ========================================================
@@ -1935,6 +2027,7 @@ def main():
         eval_loader,
         device,
         hf_split,
+        uses_valid_lengths=intent_set.masked_pooling,
     )
 
     print(

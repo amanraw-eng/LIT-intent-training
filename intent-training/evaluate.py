@@ -74,8 +74,13 @@ def log_evaluation_to_mlflow(experiment_paths, args, ckpt_path, intent_map_path,
 # model loading
 # ---------------------------------------------------------------------------
 
-def load_model(ckpt_path, model_type, n_class, device):
-    model = WhisperIntentClassification(model_type, n_class=n_class)
+def load_model(ckpt_path, model_type, n_class, device, model_cls=None):
+    """model_cls defaults to model.py's WhisperIntentClassification. Pass the
+    architecture actually used to train ckpt_path (e.g. model2's, for a
+    15-intent checkpoint) - loading the wrong one fails on state_dict shape
+    mismatches rather than silently producing garbage predictions."""
+    model_cls = model_cls or WhisperIntentClassification
+    model = model_cls(model_type, n_class=n_class)
     checkpoint = torch.load(ckpt_path, map_location=device)
     state_dict = checkpoint["state_dict"] if "state_dict" in checkpoint else checkpoint
     # LightningModel wraps WhisperIntentClassification as `self.model` and also

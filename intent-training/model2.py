@@ -4,7 +4,7 @@ import torch.nn as nn
 
 
 class WhisperIntentClassification(nn.Module):
-    def __init__(self, model_type="small", n_class=15, dropout=0.3):
+    def __init__(self, model_type="small", n_class=15, dropout=0.2):
         super().__init__()
         self.encoder = whisper.load_model(model_type).encoder
 

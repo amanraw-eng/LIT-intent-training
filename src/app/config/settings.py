@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     PORT: int = 8000
 
     HF_MODEL_REPO: str = "amn-raw/whisper-small-intent17-classifier"
+    # v2: 15-intent model, deeper classification head + masked pooling
+    # (services/whisper_model_v2.py) - see intent_service_v2.py.
+    HF_MODEL_REPO_V2: str = "kapturecx/intents15-V6"
     HF_TOKEN: str = ""
 
     LOG_LEVEL: str = "INFO"

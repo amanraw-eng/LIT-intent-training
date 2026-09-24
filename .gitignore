@@ -10,4 +10,4 @@ wandb
 data/
 .secrets/
 .wav
-
+intent-training

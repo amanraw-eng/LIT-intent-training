@@ -1,0 +1,24 @@
+[Unit]
+Description=LIT Intent Classification API
+After=network.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+# app/config/settings.py loads ".env" via a path ("../.env") that's relative
+# to the process CWD, not to the repo — so CWD must stay one level below the
+# repo root (src/) for it to resolve to the repo's own .env file.
+WorkingDirectory=${REPO_DIR}/src
+EnvironmentFile=${REPO_DIR}/.env
+Environment="PATH=${REPO_DIR}/.venv/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+Environment="CUDA_HOME=/usr/local/cuda"
+# Single process: batching.py holds the GPU-batching queue in process memory,
+# so a multi-worker run (e.g. gunicorn -w N) would give each worker its own
+# queue and model copy instead of one shared batch. Switch to a multi-worker
+# ExecStart only if that in-process batching design changes.
+ExecStart=${REPO_DIR}/.venv/bin/python -m app.main
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

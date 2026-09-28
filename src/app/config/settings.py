@@ -7,11 +7,19 @@ verbosity). Fixed, code-level defaults live in constants.py instead.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Anchored to this file (repo_root/src/app/config/settings.py -> repo_root/.env)
+# instead of the process CWD, so `.env` (including PORT/HOST) loads the same
+# way whether run via `uv run python -m app.main` from anywhere, a plain
+# `python -m app.main`, or systemd.
+_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file="../.env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
     HOST: str = "0.0.0.0"
     PORT: int = 8000

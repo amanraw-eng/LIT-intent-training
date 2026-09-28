@@ -218,11 +218,17 @@ class IntentService:
             torch.backends.cudnn.benchmark = True
             logger.info("CUDA enabled: %s", torch.cuda.get_device_name(0))
 
-            # Optional: Enable PyTorch 2.0+ execution graph optimization
+            # Optional: Enable PyTorch 2.0+ execution graph optimization.
+            # NOTE: mode="reduce-overhead" captures a CUDA/HIP graph tied to
+            # the thread that first invokes the model; real requests run via
+            # run_in_threadpool on a different worker thread than this
+            # warmup call, which crashes cudagraph replay
+            # (AssertionError in torch._inductor.cudagraph_trees). Default
+            # mode compiles without graph capture and works across threads.
             if hasattr(torch, "compile"):
                 try:
                     logger.info("Compiling model graph via torch.compile...")
-                    model = torch.compile(model, mode="reduce-overhead")
+                    model = torch.compile(model)
                     logger.info("Model compiled successfully")
                 except Exception:
                     logger.warning("torch.compile failed; falling back to eager mode execution")

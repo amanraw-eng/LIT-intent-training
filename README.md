@@ -9,9 +9,10 @@ no dependency on anything else in this repository.
 - [uv](https://docs.astral.sh/uv/)
   ``` curl -LsSf https://astral.sh/uv/install.sh | sh ```
 - `ffmpeg` on `PATH` (used by Whisper to decode uploaded audio)
-- A CUDA GPU for production use (falls back to CPU automatically if
-  `DEVICE == "cuda"` but none is available - see
-  [app/config/constants.py](app/config/constants.py))
+- A CUDA or ROCm GPU for production use (falls back to CPU automatically if
+  `DEVICE == "cuda"` but `torch.cuda.is_available()` is `False` - see
+  [app/config/constants.py](app/config/constants.py); ROCm reports itself
+  through the same `torch.cuda` API, so no code change is needed to use it)
 
 ## Setup
 
@@ -42,6 +43,30 @@ uv run python -m app.main
 On startup the service downloads the model from Hugging Face and loads it
 onto `DEVICE` (falling back to CPU if CUDA isn't available). If loading fails, the server still starts so
 `/health` can report why, instead of crashing outright.
+
+### AMD ROCm hosts
+
+`uv sync` / `pyproject.toml` resolve `torch` from the default PyPI index,
+which only publishes CUDA (NVIDIA) builds. On a ROCm host that installs a
+CUDA-only wheel, so `torch.cuda.is_available()` is `False` and the service
+silently falls back to CPU (still logs `Device: cpu`, no error). After
+`uv sync`, reinstall `torch` from the matching ROCm wheel index in the same
+venv:
+
+```bash
+uv pip install "torch==2.9.1" --torch-backend=rocm6.4 --reinstall
+```
+
+Match `rocm6.4` to the host's installed ROCm version (`cat
+/opt/rocm/.info/version`) and pick the newest `torch` version published for
+that backend at https://download.pytorch.org/whl/. This has to be redone
+after every `uv sync`, since `uv.lock` still pins the CUDA build shared with
+NVIDIA hosts - there's no single lockfile resolution that covers both
+backends. Verify with:
+
+```bash
+uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
 
 ## Configuration
 

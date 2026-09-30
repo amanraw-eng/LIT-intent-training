@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import json
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 
 import av
@@ -31,6 +32,29 @@ from ..config import (
 from .batching import DynamicBatcher
 from .whisper_model import WhisperIntentClassification
 
+# Number of forward passes per bucket size during warmup. Empirically, a
+# torch.compile mode="reduce-overhead" CUDA/HIP graph doesn't start
+# replaying (the fast path) until the 3rd call against a given shape - the
+# first two are still compiling/capturing.
+_WARMUP_ITERS_PER_BUCKET = 3
+
+
+def _compute_bucket_sizes(max_size: int) -> list[int]:
+    """Powers of two up to max_size (plus max_size itself if it isn't
+    already one). Real batches are padded up to the nearest bucket before
+    the forward pass, so torch.compile / cudagraph capture only ever sees
+    this small fixed set of shapes instead of every batch size from
+    1..max_size - each new distinct shape costs a compile, and past
+    torch._dynamo.config.recompile_limit (8 by default) further new shapes
+    silently fall back to eager permanently."""
+    sizes = []
+    n = 1
+    while n < max_size:
+        sizes.append(n)
+        n *= 2
+    sizes.append(max_size)
+    return sizes
+
 
 @dataclasses.dataclass
 class _InferenceRequest:
@@ -51,6 +75,12 @@ class IntentService:
         self.model_output_classes: int | None = None
         self.model_loaded: bool = False
         self._batcher: DynamicBatcher[_InferenceRequest, list[dict]] | None = None
+        self._bucket_sizes = _compute_bucket_sizes(settings.BATCH_MAX_SIZE)
+        # Dedicated single thread so every call into the (possibly
+        # cudagraph-compiled) model - warmup and every real batch alike -
+        # runs on the same thread. cudagraph capture is thread-pinned; a
+        # shared/rotating thread pool would crash replay on other threads.
+        self._model_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gpu-worker")
 
     # -------------------------------------------------------------------
     # Model Loading
@@ -218,22 +248,10 @@ class IntentService:
             torch.backends.cudnn.benchmark = True
             logger.info("CUDA enabled: %s", torch.cuda.get_device_name(0))
 
-            # Optional: Enable PyTorch 2.0+ execution graph optimization
-            if hasattr(torch, "compile"):
-                try:
-                    logger.info("Compiling model graph via torch.compile...")
-                    model = torch.compile(model, mode="reduce-overhead")
-                    logger.info("Model compiled successfully")
-                except Exception:
-                    logger.warning("torch.compile failed; falling back to eager mode execution")
-
-            # Warmup pass to capture graph and warm up CUDA context during startup
-            logger.info("Performing CUDA model warmup pass...")
-            dummy_mel = torch.zeros((1, 80, 3000), device=self.device)
-            autocast_context = torch.autocast(device_type="cuda", dtype=torch.float16)
-            with torch.inference_mode(), autocast_context:
-                _ = model(dummy_mel)
-            logger.info("CUDA warmup completed successfully")
+            # Compile + warmup run on self._model_executor (not this thread)
+            # so cudagraph capture happens on the same thread that will later
+            # run every real batch (see DynamicBatcher below).
+            model = self._model_executor.submit(self._compile_and_warmup, model).result()
 
         self.model = model
         self.model_loaded = True
@@ -242,6 +260,7 @@ class IntentService:
             self._run_batch_inference,
             max_batch_size=settings.BATCH_MAX_SIZE,
             max_wait_s=settings.BATCH_MAX_WAIT_MS / 1000.0,
+            executor=self._model_executor,
         )
         self._batcher.start()
 
@@ -257,10 +276,51 @@ class IntentService:
         )
         logger.info("=" * 80)
 
+    def _compile_and_warmup(self, model):
+        """Runs on self._model_executor's single dedicated thread. Optional
+        torch.compile + a warmup pass per bucket size.
+
+        NOTE: mode="reduce-overhead" (CUDA graph capture via
+        cudagraph_trees) was tried and reverted on the ROCm build of this
+        service - audio preprocessing (_preprocess_audio) also runs GPU ops
+        (log_mel_spectrogram) via the shared anyio threadpool, concurrently
+        with whatever this dedicated thread is doing. If a real request's
+        preprocessing landed while a bucket's graph was still capturing,
+        that concurrent unrelated GPU work invalidated the capture
+        (hipErrorStreamCaptureInvalidated on ROCm; cudagraph_trees is the
+        same code path on CUDA, so the same race is expected there too,
+        though it wasn't separately reproduced on NVIDIA hardware), which
+        then corrupts that bucket for the rest of the process's life and
+        cascades into unrelated-looking errors on other calls. Default mode
+        still compiles (fusion etc.) without capturing a graph, so it isn't
+        sensitive to concurrent GPU work on other threads. If you want to
+        try reduce-overhead again here, first make audio preprocessing not
+        share a thread pool with model execution.
+        """
+        if hasattr(torch, "compile"):
+            try:
+                logger.info("Compiling model graph via torch.compile...")
+                model = torch.compile(model)
+                logger.info("Model compiled successfully")
+            except Exception:
+                logger.warning("torch.compile failed; falling back to eager mode execution")
+
+        logger.info("Performing GPU model warmup for bucket sizes: %s", self._bucket_sizes)
+        autocast_context = torch.autocast(device_type="cuda", dtype=torch.float16)
+        for bucket in self._bucket_sizes:
+            dummy_mel = torch.zeros((bucket, 80, 3000), device=self.device)
+            with torch.inference_mode(), autocast_context:
+                for _ in range(_WARMUP_ITERS_PER_BUCKET):
+                    _ = model(dummy_mel)
+            logger.info("Warmed up bucket size=%d", bucket)
+        logger.info("GPU warmup completed successfully")
+        return model
+
     async def shutdown(self):
         if self._batcher is not None:
             await self._batcher.stop()
             self._batcher = None
+        self._model_executor.shutdown(wait=False)
 
     # -------------------------------------------------------------------
     # Audio Prediction
@@ -344,6 +404,12 @@ class IntentService:
             logger.exception("Audio preprocessing failed")
             raise RuntimeError(f"Audio preprocessing failed: {exc}") from exc
 
+    def _bucket_for(self, n: int) -> int:
+        for bucket in self._bucket_sizes:
+            if n <= bucket:
+                return bucket
+        return self._bucket_sizes[-1]
+
     def _run_batch_inference(self, requests: list[_InferenceRequest]) -> list[list[dict]]:
         autocast_context = (
             torch.autocast(device_type="cuda", dtype=torch.float16)
@@ -351,14 +417,24 @@ class IntentService:
         )
 
         batch_size = len(requests)
+        # CPU fallback isn't compiled/bucketed - only pad on the path that
+        # actually benefits from a fixed set of cudagraph-captured shapes.
+        bucket_size = self._bucket_for(batch_size) if self.device == "cuda" else batch_size
 
         try:
             with torch.inference_mode(), autocast_context:
                 mels = torch.cat([r.mel for r in requests], dim=0)
+
+                if bucket_size > batch_size:
+                    pad_shape = (bucket_size - batch_size, *mels.shape[1:])
+                    mels = torch.cat([mels, mels.new_zeros(pad_shape)], dim=0)
+
                 logits = self.model(mels)
 
-                if logits.ndim != 2 or logits.shape[0] != batch_size:
+                if logits.ndim != 2 or logits.shape[0] != bucket_size:
                     raise RuntimeError(f"Unexpected output shape: {tuple(logits.shape)}")
+
+                logits = logits[:batch_size]
 
                 output_classes = int(logits.shape[1])
                 self.model_output_classes = output_classes

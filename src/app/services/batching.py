@@ -16,10 +16,9 @@ only thing touching it.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import Executor
 from dataclasses import dataclass
 from typing import Callable, Generic, TypeVar
-
-from starlette.concurrency import run_in_threadpool
 
 ItemT = TypeVar("ItemT")
 ResultT = TypeVar("ResultT")
@@ -38,12 +37,19 @@ class DynamicBatcher(Generic[ItemT, ResultT]):
         *,
         max_batch_size: int,
         max_wait_s: float,
+        executor: Executor | None = None,
     ):
         if max_batch_size < 1:
             raise ValueError(f"max_batch_size must be >= 1, got {max_batch_size}")
         self._process_batch = process_batch
         self._max_batch_size = max_batch_size
         self._max_wait_s = max_wait_s
+        # Passed in explicitly (rather than defaulting to asyncio's shared
+        # pool) so process_batch always runs on the same thread every call -
+        # required when process_batch replays a torch.compile
+        # mode="reduce-overhead" CUDA/HIP graph, which is pinned to whichever
+        # thread first captured it.
+        self._executor = executor
         self._queue: "asyncio.Queue[_Pending[ItemT, ResultT]]" = asyncio.Queue()
         self._worker_task: asyncio.Task | None = None
 
@@ -88,7 +94,10 @@ class DynamicBatcher(Generic[ItemT, ResultT]):
 
     async def _process(self, pending: list[_Pending[ItemT, ResultT]]) -> None:
         try:
-            results = await run_in_threadpool(self._process_batch, [p.item for p in pending])
+            loop = asyncio.get_running_loop()
+            results = await loop.run_in_executor(
+                self._executor, self._process_batch, [p.item for p in pending]
+            )
         except Exception as exc:
             for p in pending:
                 if not p.future.done():
